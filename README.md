@@ -26,7 +26,7 @@ Welcome to the backend repository for the Freelancer Hub website! This project i
 
 1. Clone the repository:
     ```sh
-    git clone https://github.com/Bhuvangs04/Freelancer-hub-backend.git
+    git clone https://github.com/Bhuvangs04/Freelancer-Hub-frontend.git
     ```
 2. Navigate to the project directory:
     ```sh
