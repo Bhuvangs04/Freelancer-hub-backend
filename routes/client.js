@@ -145,34 +145,55 @@ router.get(
   }
 );
 
-router.get("/client/profile", verifyToken, authorize(["client"]), async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    
-    const user = await company.findOne
-    ({ userId }).select("companyName Industry Position type").populate("userId", "username email profilePictureUrl ");
+router.get(
+  "/client/profile",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.userId;
 
-    const projects = await Project.find({ clientId: userId }).select(
-      "_id title description budget deadline skillsRequired status freelancerId createdAt"
-    );
+      const user = await company
+        .findOne({ userId })
+        .select("companyName Industry Position type")
+        .populate("userId", "username email profilePictureUrl ");
 
-    const escrows = await Escrow.find({ clientId: req.user.userId });
+      const projects = await Project.find({ clientId: userId }).select(
+        "_id title description budget deadline skillsRequired status freelancerId createdAt"
+      );
 
-    // Separate funded and refunded escrows
-    const fundedEscrows = escrows.filter((e) => e.status === "funded");
-    const total_balance = fundedEscrows.reduce((sum, e) => sum + e.amount, 0);
+      const updatedProjects = await Promise.all(
+        projects.map(async (project) => {
+          const escrowWallet = await Escrow.findOne({
+            projectId: project._id,
+          });
+          return {
+            ...project.toObject(),
+            status: escrowWallet ? project.status : "cancelled",
+          };
+        })
+      );
 
-        await logActivity(req.user.userId, "Viewed profile");
-    const LogActivity = await Action.find({ userId: req.user.userId })
-      .select("action timestamp")
-      .sort({ timestamp: -1 }).limit(30);
-    res.status(200).json({ user, projects, total_balance, LogActivity });
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Error fetching profile" });
-    
+      const escrows = await Escrow.find({ clientId: req.user.userId });
+
+      // Separate funded and refunded escrows
+      const fundedEscrows = escrows.filter((e) => e.status === "funded");
+      const total_balance = fundedEscrows.reduce((sum, e) => sum + e.amount, 0);
+
+      await logActivity(req.user.userId, "Viewed profile");
+      const LogActivity = await Action.find({ userId: req.user.userId })
+        .select("action timestamp")
+        .sort({ timestamp: -1 })
+        .limit(30);
+      res
+        .status(200)
+        .json({ user, projects: updatedProjects, total_balance, LogActivity });
+    } catch (error) {
+      console.error(error);
+      res.status(500).send({ message: "Error fetching profile" });
+    }
   }
-});
+);
 
 // Edit Profile
 router.post(
@@ -181,7 +202,7 @@ router.post(
   authorize(["client"]),
   async (req, res) => {
     try {
-      const {  email, username } = req.body;
+      const { email, username } = req.body;
       const client = await User.findById(req.user.userId);
       if (!client) return res.status(404).json({ message: "Client not found" });
       client.email = email;
@@ -234,19 +255,35 @@ router.post(
   }
 );
 
-router.get("/clients/projects", verifyToken, authorize(["client"]), async (req, res) => {
-  try {
-    const projects = await Project.find({ clientId: req.user.userId }).select(
-      "_id title description budget deadline skillsRequired status freelancerId createdAt"
-    );
-    res.json({ projects });
-  } catch (error) {
-    console.error(error);
-    res.status(500).send({ message: "Error fetching projects" });
+router.get(
+  "/clients/projects",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    try {
+      const projects = await Project.find({ clientId: req.user.userId }).select(
+        "_id title description budget deadline skillsRequired status freelancerId createdAt"
+      );
+
+      const updatedProjects = await Promise.all(
+        projects.map(async (project) => {
+          const escrowWallet = await Escrow.findOne({
+            projectId: project._id,
+          });
+          return {
+            ...project.toObject(),
+            status: escrowWallet ? project.status : "Payment Pending",
+          };
+        })
+      );
+
+      res.json({ projects: updatedProjects });
+    } catch (error) {
+      console.error(error);
+      res.status(500).send({ message: "Error fetching projects" });
+    }
   }
-});
-
-
+);
 
 // Add Project
 router.post(
@@ -269,8 +306,13 @@ router.post(
         return res.status(400).json({ message: "All fields are required" });
       }
 
+      const parsedSkills = JSON.parse(skills);
+
       const user1 = await User.findById(Form_id);
-      if(!user1) return res.status(400).json({message:"User Not found Please Login Again"})
+      if (!user1)
+        return res
+          .status(400)
+          .json({ message: "User Not found Please Login Again" });
 
       const project = new Project({
         clientId: req.user.userId,
@@ -278,7 +320,7 @@ router.post(
         description,
         budget,
         deadline,
-        skillsRequired:skills,
+        skillsRequired: parsedSkills,
         status: "open",
       });
       const user = await User.findById(req.user.userId);
