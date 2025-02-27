@@ -24,6 +24,9 @@ async function verifyToken(req, res, next) {
       errorMonitor: "PublicVisibleBanned",
       errorSolution: "Please login to access this resource.",
       errorReference: "http://localhost:8080/sign-in",
+      errorDate: new Date().toISOString(),
+      errorIp: req.ip,
+      errorMethod: req.method,
     });
   }
   try {
