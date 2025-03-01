@@ -11,7 +11,7 @@ const ReviewSchema = require("../models/Review");
 const OldProjectsSchema = require("../models/OldProjects");
 const Milestone = require("../models/Milestone");
 const Action = require("../models/ActionSchema");
-
+const escrow = require("../models/Escrow");
 
 const upload = multer();
 
@@ -24,7 +24,6 @@ const logActivity = async (userId, action) => {
     console.error("Error logging activity:", error);
   }
 };
-
 
 const scanFile = async (file, allowedTypes, maxSize) => {
   if (!file) throw new Error("File is missing");
@@ -46,27 +45,39 @@ const scanFile = async (file, allowedTypes, maxSize) => {
   return type;
 };
 
-
-router.get("/skills", verifyToken, authorize(["freelancer"]), async (req, res) => {
-  try {
-    const userSkills = await UserSkill.findOne({ userId: req.user.userId });
-    if (!userSkills) return res.status(404).json({ message: "Skills not found" });
-    res.json({ skills: userSkills.skills });
-  } catch (error) {
-    console.log(error);
-    res.status(500).send({ message: "Error fetching skills" });
+router.get(
+  "/skills",
+  verifyToken,
+  authorize(["freelancer"]),
+  async (req, res) => {
+    try {
+      const userSkills = await UserSkill.findOne({ userId: req.user.userId });
+      if (!userSkills)
+        return res.status(404).json({ message: "Skills not found" });
+      res.json({ skills: userSkills.skills });
+    } catch (error) {
+      console.log(error);
+      res.status(500).send({ message: "Error fetching skills" });
+    }
   }
-})
+);
 
-router.get("/oldProjects", verifyToken, authorize(["freelancer"]), async (req, res) => {
-  try {
-    const projects = await OldProjectsSchema.find({ freelancerId: req.user.userId });
-    res.json({ projects });
-  } catch (error) {
-    console.log(error);
-    res.status(500).send({ message: "Error fetching old projects" });
+router.get(
+  "/oldProjects",
+  verifyToken,
+  authorize(["freelancer"]),
+  async (req, res) => {
+    try {
+      const projects = await OldProjectsSchema.find({
+        freelancerId: req.user.userId,
+      });
+      res.json({ projects });
+    } catch (error) {
+      console.log(error);
+      res.status(500).send({ message: "Error fetching old projects" });
+    }
   }
-})  
+);
 
 // Create a milestone for a project
 router.post(
@@ -79,10 +90,13 @@ router.post(
       const { title, description, dueDate, amount } = req.body;
 
       const project = await Project.findById(projectId);
-      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (!project)
+        return res.status(404).json({ message: "Project not found" });
 
       if (project.freelancerId.toString() !== req.user.userId) {
-        return res.status(403).json({ message: "Unauthorized to add milestones" });
+        return res
+          .status(403)
+          .json({ message: "Unauthorized to add milestones" });
       }
 
       const milestone = new Milestone({
@@ -136,7 +150,8 @@ router.patch(
       const { status } = req.body; // "pending", "completed", "approved"
 
       const milestone = await Milestone.findById(milestoneId);
-      if (!milestone) return res.status(404).json({ message: "Milestone not found" });
+      if (!milestone)
+        return res.status(404).json({ message: "Milestone not found" });
 
       milestone.status = status;
       await milestone.save();
@@ -155,7 +170,7 @@ router.post(
   authorize(["freelancer"]),
   async (req, res) => {
     const { projectId } = req.params;
-    const { amount, message } = req.body;
+    const { amount, message, resumePermission } = req.body;
     try {
       const project = await Project.findById(projectId);
       if (project === null)
@@ -167,6 +182,7 @@ router.post(
         freelancerId: req.user.userId,
         amount,
         message,
+        resume_permission: resumePermission,
       });
       await bid.save();
       res.json({ message: "Bid submitted successfully" });
@@ -177,16 +193,14 @@ router.post(
 );
 
 router.get(
-  "/projects/:projectId/bid",
+  "/projects/bid/finalized",
   verifyToken,
   authorize(["freelancer"]),
   async (req, res) => {
-    const { projectId } = req.params;
     try {
       const bids = await BidSchema.find({
-        projectId,
         freelancerId: req.user.userId,
-      });
+      }).populate({path:"projectId",select:"title description budget status deadline skillsRequired"}).select("-resume_permission -__v  -updatedAt");
       res.json({ bids });
     } catch (err) {
       res.status(500).send({ mesage: "Error fetching bids" });
@@ -194,21 +208,7 @@ router.get(
   }
 );
 
-router.get(
-  "/projects/bid/:bidId",
-  verifyToken,
-  authorize(["freelancer"]),
-  async (req, res) => {
-    const { bidId } = req.params;
-    try {
-      const bid = await BidSchema.findById(bidId);
-      if (!bid) return res.status(404).json({ message: "Bid not found" });
-      res.json({ bid });
-    } catch (err) {
-      res.status(500).send({ message: "Error fetching bid" });
-    }
-  }
-);
+
 
 router.get(
   "/projects/approved/work",
@@ -423,19 +423,16 @@ router.post(
       }
 
       await profile.save(); // Save only if changes were made
-        await logActivity(
-          req.user.userId,
-          `Profile updated successfully`
-        );
-      res.status(200).json({ success: true, message: "Profile updated successfully" });
+      await logActivity(req.user.userId, `Profile updated successfully`);
+      res
+        .status(200)
+        .json({ success: true, message: "Profile updated successfully" });
     } catch (error) {
       console.error(error);
       res.status(500).json({ success: false, message: "Server error" });
     }
   }
 );
-
-
 
 router.post(
   "/freelancer/upload-portfolio/photo",
@@ -468,10 +465,10 @@ router.post(
       const url = await uploadFile(file, process.env.AWS_BUCKET_NAME, filename);
       freelancer.profilePictureUrl = url;
       await freelancer.save();
-        await logActivity(
-          req.user.userId,
-          `Profile picture updated successfully`
-        );
+      await logActivity(
+        req.user.userId,
+        `Profile picture updated successfully`
+      );
       res.json({ url });
     } catch (error) {
       console.log(error);
@@ -507,10 +504,7 @@ router.post(
       const url = await uploadFile(file, process.env.AWS_BUCKET_NAME, filename);
       freelancer.resumeUrl = url;
       await freelancer.save();
-       await logActivity(
-         req.user.userId,
-         `Resume updated successfully`
-       );
+      await logActivity(req.user.userId, `Resume updated successfully`);
       res.json({ url });
     } catch (error) {
       console.error(error);
@@ -518,9 +512,6 @@ router.post(
     }
   }
 );
-
-
-
 
 router.get(
   "/freelancer/stats",
@@ -564,7 +555,6 @@ router.get(
   }
 );
 
-
 router.post(
   "/freelancer/availability",
   verifyToken,
@@ -591,8 +581,47 @@ router.post(
   }
 );
 
+router.get(
+  "/open/projects",
+  verifyToken,
+  authorize(["freelancer"]),
+  async (req, res) => {
+    try {
+      // Fetch projects from escrow where no freelancer is assigned and status is funded
+      const escrowProjects = await escrow
+        .find({ freelancerId: null, status: "funded" })
+        .populate({
+          path: "projectId",
+          match: { status: "open" },
+          select: "-__v -createdAt -updatedAt -freelancerId",
+        });
 
+      // Fetch all bids made by the freelancer
+      const bids = await BidSchema.find({
+        freelancerId: req.user.userId,
+      }).select("projectId");
 
+      if (escrowProjects.length === 0) {
+        return res.status(404).json({ message: "No open projects found" });
+      }
+
+      // Convert bid project IDs to an array for easy comparison
+      const biddedProjectIds = bids.map((bid) => bid.projectId.toString());
+
+      // Filter out projects that the freelancer has already bid on
+      const openProjects = escrowProjects.filter(
+        (ep) =>
+          ep.projectId !== null &&
+          !biddedProjectIds.includes(ep.projectId.toString())
+      );
+
+      res.json({ openProjects, bids });
+    } catch (error) {
+      console.log(error);
+      res.status(500).json({ message: "Error fetching open projects" });
+    }
+  }
+);
 
 router.put(
   "/upload-portfolio",
@@ -601,17 +630,16 @@ router.put(
   async (req, res) => {
     try {
       const { bio, username } = req.body;
-      const freelancer = await User.findById(req.user.userId).select("-password -__v -createdAt -updatedAt -isBanned -otpVerified -banExpiresAt -Strikes");
+      const freelancer = await User.findById(req.user.userId).select(
+        "-password -__v -createdAt -updatedAt -isBanned -otpVerified -banExpiresAt -Strikes"
+      );
       if (!freelancer)
         return res.status(404).json({ message: "Freelancer not found" });
 
       freelancer.bio = bio;
       freelancer.username = username;
       await freelancer.save();
-       await logActivity(
-         req.user.userId,
-         `Portfolio updated successfully`
-       );
+      await logActivity(req.user.userId, `Portfolio updated successfully`);
       res.json({ message: "Portfolio updated successfully", freelancer });
     } catch (error) {
       console.log(error);
@@ -620,12 +648,12 @@ router.put(
   }
 );
 
-
 router.get("/details", verifyToken, async (req, res) => {
   try {
-    const id  = req.user.userId;
-    console.log(id);
-    const freelancer = await User.findById(id).select("-password -__v -createdAt -updatedAt -isBanned -otpVerified -banExpiresAt -Strikes");
+    const id = req.user.userId;
+    const freelancer = await User.findById(id).select(
+      "-password -__v -createdAt -updatedAt -isBanned -otpVerified -banExpiresAt -Strikes"
+    );
     if (!freelancer)
       return res.status(404).json({ message: "Freelancer not found" });
     res.json({ freelancer });

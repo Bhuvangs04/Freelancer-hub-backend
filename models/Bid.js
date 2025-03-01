@@ -12,6 +12,7 @@ const BidSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    resume_permission: { type: Boolean, required: true, default: false },
     amount: { type: Number, required: true },
     message: { type: String },
     status: {
