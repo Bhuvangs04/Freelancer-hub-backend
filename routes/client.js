@@ -51,6 +51,79 @@ const scanFile = async (file, allowedTypes, maxSize) => {
 };
 
 router.post(
+  "/client/:freelancerId",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    try {
+      const { freelancerId } = req.params;
+      const { projectId } = req.query;
+      const project = await Project.findOne({ _id: projectId, status: "open" });
+      if (!project)
+        return res.status(404).json({ message: "Project not found" });
+      console.log(req.user.userId);
+      console.log(project.clientId);
+      if (project.clientId.toString() !== req.user.userId) {
+        return res.status(403).json({ message: "Unauthorized action" });
+      }
+      project.freelancerId = freelancerId;
+      project.status = "in_progress";
+      await project.save();
+      const escrow = await Escrow.findOne({
+        projectId: project._id,
+      });
+      if (!escrow) {
+        return res.status(400).json({ message: "No escrow balance available" });
+      }
+      escrow.freelancerId = freelancerId;
+      await escrow.save();
+
+      const bid = await BidSchema.findOne({
+        projectId: project._id,
+        freelancerId: freelancerId,
+      });
+      if (!bid) {
+        return res.status(400).json({ message: "Bid not found" });
+      }
+      bid.status = "accepted";
+      await bid.save();
+      await logActivity(req.user.userId, "Hired a freelancer");
+      res.json({ message: "Freelancer hired successfully" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Error processing request" });
+    }
+  }
+);
+
+router.post(
+  "/client/:freelancerId/reject",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    try {
+      const { freelancerId } = req.params;
+      const { projectId } = req.query;
+
+      const bid = await BidSchema.findOne({
+        projectId: projectId,
+        freelancerId: freelancerId,
+      });
+      if (!bid) {
+        return res.status(400).json({ message: "Bid not found" });
+      }
+      bid.status = "rejected";
+      await bid.save();
+      await logActivity(req.user.userId, "Hired a freelancer");
+      res.json({ message: "Freelancer hired successfully" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Error processing request" });
+    }
+  }
+);
+
+router.post(
   "/client/company",
   verifyToken,
   authorize(["client"]),
@@ -92,7 +165,6 @@ router.post(
     }
   }
 );
-
 
 // Release Payment
 // router.post(
@@ -285,9 +357,42 @@ router.get(
   }
 );
 
+router.get(
+  "/clients/projects/bids",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    try {
+      const projects = await Project.find({
+        clientId: req.user.userId,
+        status: "open",
+      }).select(
+        "_id title description budget deadline skillsRequired status freelancerId createdAt"
+      );
+
+      const updatedProjects = await Promise.all(
+        projects.map(async (project) => {
+          const escrowWallet = await Escrow.findOne({
+            projectId: project._id,
+          });
+          return {
+            ...project.toObject(),
+            status: escrowWallet ? "open" : "Payment Pending",
+          };
+        })
+      );
+
+      res.json({ projects: updatedProjects });
+    } catch (error) {
+      console.error(error);
+      res.status(500).send({ message: "Error fetching projects" });
+    }
+  }
+);
+
 // Add Project
 router.post(
-  "/client/add-project",
+  "/clients/add-project",
   verifyToken,
   authorize(["client"]),
   upload.none(), // No files, only text fields
@@ -342,8 +447,6 @@ router.post(
     }
   }
 );
-
-
 
 router.get(
   "/get/wallet/:clientId",
@@ -402,7 +505,6 @@ router.get(
         });
       });
 
-
       res.status(200).json({
         total_balance, // Only funded escrows
         refunded_balance, // Shows refunded amounts separately
@@ -416,8 +518,6 @@ router.get(
     }
   }
 );
-
-
 
 router.put(
   "/projects/:projectId",
@@ -436,7 +536,7 @@ router.put(
 
       Object.assign(project, req.body);
       await project.save();
-        await logActivity(req.user.userId, "Updated project");
+      await logActivity(req.user.userId, "Updated project");
 
       res.status(200).json({ message: "Project updated successfully" });
     } catch (error) {
@@ -445,7 +545,6 @@ router.put(
   }
 );
 
-
 router.get(
   "/projects/:projectId/bids",
   verifyToken,
@@ -453,13 +552,40 @@ router.get(
   async (req, res) => {
     try {
       const { projectId } = req.params;
-      const bids = await BidSchema.find({ projectId }).populate(
-        "freelancerId",
-        "username"
-      );
 
-      res.json({ bids });
+      const project = await Project.findOne({
+        _id: projectId,
+        clientId: req.user.userId,
+        status: "open",
+      });
+
+      if (!project)
+        return res.status(404).json({
+          message: "Freelancer already hired or project not found",
+        });
+
+      // Fetch bids for the given projectId and populate freelancer details
+      const bids = await BidSchema.find({ projectId, status: "pending" })
+        .populate({
+          path: "freelancerId",
+          select: "username resumeUrl profilePictureUrl",
+        })
+        .lean();
+
+      // Filter bids based on resume permission
+      const filteredBids = bids.map((bid) => {
+        if (bid.resume_permission) {
+          return bid;
+        } else {
+          const { resumeUrl, ...rest } = bid.freelancerId;
+          return { ...bid, freelancerId: rest };
+        }
+      });
+
+      // Send the filtered bids as response
+      res.json({ bids: filteredBids });
     } catch (error) {
+      console.error("Error fetching bids:", error); // Log the error
       res.status(500).send({ message: "Error fetching bids" });
     }
   }
