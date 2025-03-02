@@ -9,18 +9,16 @@ const signupRoute = require('./routes/Sign-up');
 const uploadRoute = require('./routes/bucketSending');
 const freelancer = require('./routes/freelancer');
 const chats = require('./routes/chat'); 
+const workSubmission = require("./routes/WorkSubmission");
 // const auditLogs = require("./middleware/AuditLogs");  no need for this
 const client = require("./routes/client");
-const payment = require("./routes/payment")
-const admin = require("./routes/admin")
+const payment = require("./routes/payment");
+const admin = require("./routes/admin");
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
-const allowedOrigins = [
-  "http://localhost:8080",
-  "http://localhost:4000"
-];
+const allowedOrigins = ["http://localhost:8080", "http://localhost:4000"];
 
 app.disable("x-powered-by"); // Removes "X-Powered-By" header
 
@@ -39,7 +37,7 @@ const corsOptions = {
       callback(new Error("Not allowed by CORS"));
     }
   },
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   credentials: true,
 };
 // Use CORS middleware
@@ -49,31 +47,28 @@ app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 app.use(helmet());
 
-
-
 app.use((req, res, next) => {
   console.log(`[REQUEST]: ${req.method} ${req.url}`);
   next();
 });
 
-mongoose.connection.on('error', (err) => {
-  console.error('Error connecting to MongoDB:', err);
+mongoose.connection.on("error", (err) => {
+  console.error("Error connecting to MongoDB:", err);
 });
 
 app.get("/health", (req, res) => {
   res.status(200).send("OK");
 });
 
-
-
 app.use("/api/vi/client", client);
-app.use('/api/vi', loginRoute);
-app.use('/api/vi', signupRoute);
-app.use('/api/vi', uploadRoute);
+app.use("/api/vi", loginRoute);
+app.use("/api/vi", signupRoute);
+app.use("/api/vi", uploadRoute);
 app.use("/api/vi/admin", admin);
 app.use("/api/vi/freelancer", freelancer);
 app.use("/api/vi/chat", chats);
 app.use("/api/vi/payments", payment);
+app.use("/api/vi/worksubmission", workSubmission);
 
 
 app.listen(PORT,() => {

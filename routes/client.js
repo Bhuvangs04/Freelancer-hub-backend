@@ -12,6 +12,8 @@ const UserSkillSchema = require("../models/UserSkill");
 const OldProjectsSchema = require("../models/OldProjects");
 const company = require("../models/Company-clients");
 const Action = require("../models/ActionSchema");
+const OnGoingSchema = require("../models/OnGoingProject.Schema");
+const ChatSchema = require("../models/chat_sys");
 
 const Escrow = require("../models/Escrow");
 const ReviewSchema = require("../models/Review");
@@ -28,7 +30,6 @@ const logActivity = async (userId, action) => {
     console.error("Error logging activity:", error);
   }
 };
-
 
 const scanFile = async (file, allowedTypes, maxSize) => {
   if (!file) throw new Error("File is missing");
@@ -61,8 +62,6 @@ router.post(
       const project = await Project.findOne({ _id: projectId, status: "open" });
       if (!project)
         return res.status(404).json({ message: "Project not found" });
-      console.log(req.user.userId);
-      console.log(project.clientId);
       if (project.clientId.toString() !== req.user.userId) {
         return res.status(403).json({ message: "Unauthorized action" });
       }
@@ -81,12 +80,26 @@ router.post(
       const bid = await BidSchema.findOne({
         projectId: project._id,
         freelancerId: freelancerId,
-      });
+      }).populate("freelancerId", "username");
       if (!bid) {
         return res.status(400).json({ message: "Bid not found" });
       }
       bid.status = "accepted";
+      const onGoingProject = new OnGoingSchema({
+        projectId: project._id,
+        clientId: project.clientId,
+        title: project.title,
+        freelancerId: freelancerId,
+        freelancer: bid.freelancerId.username,
+        status: "in_progress",
+        progress: 0,
+        dueDate: project.deadline,
+        budget: project.budget,
+        freelancerBidPrice: bid.amount,
+        description: project.description,
+      });
       await bid.save();
+      await onGoingProject.save();
       await logActivity(req.user.userId, "Hired a freelancer");
       res.json({ message: "Freelancer hired successfully" });
     } catch (error) {
@@ -95,6 +108,40 @@ router.post(
     }
   }
 );
+
+router.get("/ongoing/projects", verifyToken, async (req, res) => {
+  try {
+    const projects = await OnGoingSchema.find({ clientId: req.user.userId });
+
+    // Fetch the latest 5 messages for each freelancer in the projects
+    const projectsWithMessages = await Promise.all(
+      projects.map(async (project) => {
+        const messages = await ChatSchema.find({
+          $or: [
+            { sender: project.freelancerId, receiver: req.user.userId }, // Messages from freelancer to client
+            { sender: req.user.userId, receiver: project.freelancerId }, // Messages from client to freelancer
+          ],
+        })
+          .sort({ timestamp: -1 })
+          .limit(5);
+        const totalTasks = project.tasks.length;
+        const completedTasks = project.tasks.filter(
+          (task) => task.completed
+        ).length;
+        const progress =
+          totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+        return { ...project._doc, messages, progress }; // Merge messages with project data
+      })
+    );
+
+    res.status(200).json(projectsWithMessages);
+  } catch (error) {
+    console.log(error);
+    res.status(500).send({ message: "Error fetching projects" });
+  }
+});
+
 
 router.post(
   "/client/:freelancerId/reject",

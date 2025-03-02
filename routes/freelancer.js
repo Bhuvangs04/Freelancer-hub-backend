@@ -45,6 +45,8 @@ const scanFile = async (file, allowedTypes, maxSize) => {
   return type;
 };
 
+
+
 router.get(
   "/skills",
   verifyToken,

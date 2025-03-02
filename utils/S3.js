@@ -22,8 +22,6 @@ const uploadFile = async (file, bucketName, filename) => {
 };
 
 const deleteFile = async (fileKey) => {
-  console.log(fileKey);
-  console.log(process.env.AWS_BUCKET_NAME);
   const params = {
     Bucket: process.env.AWS_BUCKET_NAME,
     Key: fileKey,
