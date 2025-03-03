@@ -9,8 +9,18 @@ const TransactionSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["deposit", "withdrawal", "release", "refund", "commission"],
+      enum: [
+        "deposit",
+        "withdrawal",
+        "release",
+        "refund",
+        "commission",
+        "received",
+      ],
       required: true,
+    },
+    description: {
+      type: String,
     },
     amount: { type: Number, required: true },
     status: {
@@ -18,7 +28,7 @@ const TransactionSchema = new mongoose.Schema(
       enum: ["completed", "failed", "settled", "on_hold"],
       default: "completed",
     },
-    RefundedId:{type:String}
+    RefundedId: { type: String },
   },
   { timestamps: true }
 );

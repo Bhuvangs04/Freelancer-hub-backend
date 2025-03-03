@@ -9,7 +9,6 @@ const Project = require("../models/Project");
 const fileType = require("file-type");
 const ReviewSchema = require("../models/Review");
 const OldProjectsSchema = require("../models/OldProjects");
-const Milestone = require("../models/Milestone");
 const Action = require("../models/ActionSchema");
 const escrow = require("../models/Escrow");
 
@@ -45,8 +44,6 @@ const scanFile = async (file, allowedTypes, maxSize) => {
   return type;
 };
 
-
-
 router.get(
   "/skills",
   verifyToken,
@@ -81,84 +78,31 @@ router.get(
   }
 );
 
-// Create a milestone for a project
-router.post(
-  "/projects/:projectId/milestones",
+// Update milestone status
+router.patch(
+  "/projects/:projectId/:status",
   verifyToken,
   authorize(["freelancer"]),
   async (req, res) => {
     try {
-      const { projectId } = req.params;
-      const { title, description, dueDate, amount } = req.body;
+      const { projectId, status } = req.params;
 
-      const project = await Project.findById(projectId);
-      if (!project)
-        return res.status(404).json({ message: "Project not found" });
-
-      if (project.freelancerId.toString() !== req.user.userId) {
-        return res
-          .status(403)
-          .json({ message: "Unauthorized to add milestones" });
-      }
-
-      const milestone = new Milestone({
-        projectId,
-        title,
-        description,
-        dueDate,
-        amount,
-        status: "pending",
+      const projectDetails = await Project.find({
+        _id: projectId,
+        status: "completed",
       });
-
-      await milestone.save();
-      res.json({ message: "Milestone created successfully", milestone });
-    } catch (error) {
-      console.log(error);
-      res.status(500).json({ message: "Error creating milestone" });
-    }
-  }
-);
-
-// Get all milestones for a project
-router.get(
-  "/projects/:projectId/milestones",
-  verifyToken,
-  authorize(["freelancer", "client"]),
-  async (req, res) => {
-    try {
-      const { projectId } = req.params;
-      const milestones = await Milestone.find({ projectId });
-
-      if (milestones.length === 0) {
-        return res.status(404).json({ message: "No milestones found" });
+      if (projectDetails) {
+        return res.status(200).json({ messsage: "Project already completed" });
       }
 
-      res.json({ milestones });
-    } catch (error) {
-      console.log(error);
-      res.status(500).json({ message: "Error fetching milestones" });
-    }
-  }
-);
-
-// Update milestone status
-router.patch(
-  "/projects/:projectId/milestones/:milestoneId/status",
-  verifyToken,
-  authorize(["freelancer", "client"]),
-  async (req, res) => {
-    try {
-      const { milestoneId } = req.params;
-      const { status } = req.body; // "pending", "completed", "approved"
-
-      const milestone = await Milestone.findById(milestoneId);
+      const milestone = await Ongoing.findById(projectId);
       if (!milestone)
         return res.status(404).json({ message: "Milestone not found" });
 
       milestone.status = status;
       await milestone.save();
 
-      res.json({ message: "Milestone status updated", milestone });
+      res.json({ message: "Milestone status updated" });
     } catch (error) {
       console.log(error);
       res.status(500).json({ message: "Error updating milestone status" });
@@ -202,15 +146,18 @@ router.get(
     try {
       const bids = await BidSchema.find({
         freelancerId: req.user.userId,
-      }).populate({path:"projectId",select:"title description budget status deadline skillsRequired"}).select("-resume_permission -__v  -updatedAt");
+      })
+        .populate({
+          path: "projectId",
+          select: "title description budget status deadline skillsRequired",
+        })
+        .select("-resume_permission -__v  -updatedAt");
       res.json({ bids });
     } catch (err) {
       res.status(500).send({ mesage: "Error fetching bids" });
     }
   }
 );
-
-
 
 router.get(
   "/projects/approved/work",
@@ -348,6 +295,7 @@ router.get(
 
 const UserSkill = require("../models/UserSkill");
 const OldProject = require("../models/OldProjects");
+const Ongoing = require("../models/OnGoingProject.Schema");
 router.post(
   "/freelancer/update",
   verifyToken,

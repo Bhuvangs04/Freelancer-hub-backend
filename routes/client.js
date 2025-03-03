@@ -91,7 +91,7 @@ router.post(
         title: project.title,
         freelancerId: freelancerId,
         freelancer: bid.freelancerId.username,
-        status: "in_progress",
+        status: "in-progress",
         progress: 0,
         dueDate: project.deadline,
         budget: project.budget,

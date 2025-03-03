@@ -1,7 +1,8 @@
 const express = require("express");
 const { verifyToken, authorize } = require("../middleware/Auth");
 const Razorpay = require("razorpay");
-const { v4: uuidv4 } = require("uuid");
+const mongoose = require("mongoose");
+const FreelancerEscrowSchema = require("../models/FreelancerEscrow");
 const router = express.Router();
 const Payment = require("../models/Payment");
 const Escrow = require("../models/Escrow");
@@ -10,7 +11,7 @@ const Project = require("../models/Project");
 const axios = require("axios");
 const crypto = require("crypto");
 const Activity = require("../models/ActionSchema");
-
+const Ongoing = require("../models/OnGoingProject.Schema");
 
 const logActivity = async (userId, action) => {
   try {
@@ -20,43 +21,41 @@ const logActivity = async (userId, action) => {
   }
 };
 
-
-
-
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-
-
-
-
 // Create payment order
-router.post("/create-order", verifyToken,authorize(['client']) ,async (req, res) => {
-  const { amount, currency, project_id, client_id } = req.body;
-  try {
-    const order = await razorpay.orders.create({
-      amount: amount,
-      currency,
-    });
+router.post(
+  "/create-order",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    const { amount, currency, project_id, client_id } = req.body;
+    try {
+      const order = await razorpay.orders.create({
+        amount: amount,
+        currency,
+      });
 
-    const payment = new Payment({
-      userId: client_id,
-      projectId: project_id,
-      transactionId: order.id,
-      amount: amount/100,
-      paymentMethod: "bank_transfer",
-      status: "pending",
-    });
-    await payment.save();
-    res.json(order);
-  } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Error creating order", error: err.message });
+      const payment = new Payment({
+        userId: client_id,
+        projectId: project_id,
+        transactionId: order.id,
+        amount: amount / 100,
+        paymentMethod: "bank_transfer",
+        status: "pending",
+      });
+      await payment.save();
+      res.json(order);
+    } catch (err) {
+      res
+        .status(500)
+        .json({ message: "Error creating order", error: err.message });
+    }
   }
-});
+);
 
 // Verify payment
 // Verify payment
@@ -175,8 +174,6 @@ router.post(
   }
 );
 
-
-
 // Project deletion (Refund funds to client)
 router.delete(
   "/delete-project/:projectId",
@@ -221,29 +218,28 @@ router.delete(
       }
 
       // Fetch Razorpay balance
-        // Process refund immediately
-        refundResponse = await razorpay.payments.refund(
-          paymentRecord.transactionId,
-          {
-            amount: escrow.amount * 100, // Convert to paisa
-          }
-        );
+      // Process refund immediately
+      refundResponse = await razorpay.payments.refund(
+        paymentRecord.transactionId,
+        {
+          amount: escrow.amount * 100,
+        }
+      );
 
-        // Update escrow status
-        escrow.status = "refunded";
-        await escrow.save();
+      // Update escrow status
+      escrow.status = "refunded";
+      await escrow.save();
 
-        // Record transaction
-        await Transaction.create({
-          escrowId: escrow._id,
-          type: "refund",
-          amount: escrow.amount,
-          status: "completed",
-          refundedId: refundResponse.id,
-        });
+      // Record transaction
+      await Transaction.create({
+        escrowId: escrow._id,
+        type: "refund",
+        amount: escrow.amount,
+        status: "completed",
+        refundedId: refundResponse.id,
+      });
 
-        console.log(`Refund processed immediately for project ${projectId}`);
-     
+      console.log(`Refund processed immediately for project ${projectId}`);
 
       // Mark project as canceled
       project.status = "cancelled";
@@ -261,68 +257,153 @@ router.delete(
       });
     } catch (err) {
       console.error("Error processing project cancellation:", err);
-      res
-        .status(500)
-        .json({
-          message: "Error processing project cancellation",
-          error: err.message,
-        });
+      res.status(500).json({
+        message: "Error processing project cancellation",
+        error: err.message,
+      });
     }
   }
 );
 
-
 // Assign freelancer to project
-router.post("/assign-freelancer", verifyToken,authorize(['client']), async (req, res) => {
-  const { project_id, freelancer_id } = req.body;
-  try {
-    const escrow = await Escrow.findOne({
-      projectId: project_id,
-      status: "funded",
-    });
-    if (!escrow) return res.status(404).send("Escrow not found");
+router.post(
+  "/assign-freelancer",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    const { project_id, freelancer_id } = req.body;
+    try {
+      const escrow = await Escrow.findOne({
+        projectId: project_id,
+        status: "funded",
+      });
+      if (!escrow) return res.status(404).send("Escrow not found");
 
-    escrow.freelancerId = freelancer_id;
-    await escrow.save();
-    res.send("Freelancer assigned successfully");
-  } catch (err) {
-    res.status(500).send("Error assigning freelancer");
+      escrow.freelancerId = freelancer_id;
+      await escrow.save();
+      res.send("Freelancer assigned successfully");
+    } catch (err) {
+      res.status(500).send("Error assigning freelancer");
+    }
   }
-});
+);
 
 // Client releases funds to freelancer
-router.post("/release-payment", verifyToken,authorize(['client']) ,async (req, res) => {
-  const { project_id, client_id } = req.body;
-  try {
-    const escrow = await Escrow.findOne({
-      projectId: project_id,
-      clientId: client_id,
-      status: "funded",
-    });
-    if (!escrow) return res.status(404).send({message:"Escrow record not found"});
-    const findProject = await Project.findOne ({  _id: project_id, clientId: client_id, status: "completed" });
-    if (!findProject) return res.status(404).send({message:"Project not found or unauthorized"});
-    if(findProject.budget > escrow.amount){
-      return res.status(400).send({message:"Insufficient funds to release"});
-    };
+router.post(
+  "/release-payment",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    const { project_id, client_id, freelancer_id } = req.body;
+    try {
+      const escrow = await Escrow.findOne({
+        projectId: project_id,
+        clientId: client_id,
+        freelancerId: freelancer_id,
+        status: "funded",
+      });
 
-    escrow.amount -=findProject.budget;
-    escrow.status = "released";
+      if (!escrow) {
+        return res.status(404).json({ message: "Escrow record not found" });
+      }
 
-    await escrow.save();
+      const findProject = await Ongoing.findOne({
+        projectId: project_id,
+        clientId: client_id,
+        freelancerId: freelancer_id,
+        status: "completed",
+      });
 
-    await Transaction.create({
-      _id: uuidv4(),
-      escrowId: escrow._id,
-      type: "release",
-      amount: escrow.amount,
-      status: "completed",
-    });
+      if (!findProject) {
+        return res
+          .status(404)
+          .json({ message: "Project not found or unauthorized" });
+      }
 
-    res.status(200).send({message:"Funds released to freelancer"});
-  } catch (err) {
-    res.status(500).send("Error releasing payment");
+      // Ensure enough funds in escrow before releasing
+      if (findProject.freelancerBidPrice > escrow.amount) {
+        return res
+          .status(400)
+          .json({ message: "Insufficient funds to release" });
+      }
+
+      const project = await Project.find({
+        _id: project_id,
+        status: "in_progress",
+      });
+      if (!project) {
+        return res.status(404).json({ message: "No projects Found" });
+      }
+
+      // Calculate freelancer's payment and update escrow
+      const freelancerAmount = findProject.freelancerBidPrice;
+      escrow.amount -= freelancerAmount;
+      if (escrow.amount === 0) {
+        escrow.status = "released";
+      } else {
+        const paymentRecord = await Payment.findOne({
+          projectId: project_id,
+          userId: client_id,
+          status: "completed",
+        });
+
+        const refundResponse = await razorpay.payments.refund(
+          paymentRecord.transactionId,
+          {
+            amount: escrow.amount * 100,
+          }
+        );
+        escrow.status = "partial refund";
+        await Transaction.create({
+          escrowId: escrow._id,
+          type: "refund",
+          amount: escrow.amount,
+          status: "completed",
+          refundedId: refundResponse.id,
+        });
+      }
+
+      project.status = "completed";
+      escrow.amount = 0.0;
+      await project.save();
+      await escrow.save();
+      // Create a new escrow record for the freelancer
+      const createNewEscrow = new FreelancerEscrowSchema({
+        projectId: project_id,
+        freelancerId: freelancer_id,
+        amount: freelancerAmount,
+      });
+
+      await createNewEscrow.save();
+
+      // Record transactions
+      await Transaction.create({
+        escrowId: createNewEscrow._id,
+        description: `Payment received for project: ${
+          findProject.title || "Unnamed Project"
+        }`,
+        amount: freelancerAmount,
+        status: "completed",
+        type: "received",
+      });
+
+      await Transaction.create({
+        escrowId: escrow._id,
+        type: "release",
+        description: `Payment sended for work, name: ${
+          findProject.freelancer || "Unnamed Project"
+        }`,
+        amount: freelancerAmount,
+        status: "settled",
+      });
+
+      res.status(200).json({ message: "Funds released to freelancer" });
+    } catch (err) {
+      console.error("Error releasing payment:", err);
+      res.status(500).json({ message: "Error releasing payment" });
+    }
   }
-});
+);
+
 
 module.exports = router;

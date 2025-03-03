@@ -7,6 +7,8 @@ const OnGoing = require("../models/OnGoingProject.Schema");
 const mongoose = require("mongoose");
 const { uploadFile, deleteFile } = require("../utils/S3");
 const Ongoing = require("../models/OnGoingProject.Schema");
+const User = require("../models/User");
+const chat_sys = require("../models/chat_sys");
 
 router.post("/tasks", verifyToken, async (req, res) => {
   try {
@@ -174,15 +176,33 @@ router.delete("/projects/:projectId/files/:fileId", async (req, res) => {
 // =================== GET ONGOING PROJECT DETAILS ===================
 router.get("/ongoing/projects/V1", verifyToken, async (req, res) => {
   try {
-    const projects = await OnGoing.find({
-      freelancerId: req.user.userId,
-    });
-    res.status(200).json(projects);
+    const projects = await OnGoing.find({ freelancerId: req.user.userId });
+
+    // Map through projects to add clientName and messageCount
+    const updatedProjects = await Promise.all(
+      projects.map(async (project) => {
+        const user = await User.findOne({ _id: project.clientId }).select(
+          "username"
+        );
+        const messageCount = await chat_sys.countDocuments({
+          clientId: project.clientId,
+        });
+
+        return {
+          ...project.toObject(),
+          clientName: user?.username || "Unknown",
+          messageCount,
+        };
+      })
+    );
+
+    res.status(200).json(updatedProjects);
   } catch (error) {
     console.error("Error fetching projects:", error);
     res.status(500).json({ message: "Error fetching projects" });
   }
 });
+
 
 router.get("/projects/:id", verifyToken, async (req, res) => {
   try {

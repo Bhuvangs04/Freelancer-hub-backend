@@ -1,26 +1,21 @@
 const mongoose = require("mongoose");
 
-const EscrowSchema = new mongoose.Schema(
+const FreelancerEscrowSchema = new mongoose.Schema(
   {
     projectId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Project",
       required: true,
     },
-    clientId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
     freelancerId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     amount: { type: Number, required: true },
     status: {
       type: String,
-      enum: ["funded", "released", "refunded", "paid", "partial refund"],
-      default: "funded",
+      enum: ["paid", "withdraw"],
+      default: "paid",
     },
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Escrow", EscrowSchema);
+module.exports = mongoose.model("FreelancerEscrow", FreelancerEscrowSchema);

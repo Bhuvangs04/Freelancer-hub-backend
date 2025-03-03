@@ -25,7 +25,7 @@ const OnGoingSchema = new mongoose.Schema(
     clientId: { type: String, required: true },
     freelancer: { type: String, required: true },
     freelancerId: { type: String, required: true },
-    status: { type: String, enum: ["in_progress", "on_hold", "completed"] },
+    status: { type: String, enum: ["in-progress", "on-hold", "completed"] },
     progress: Number,
     dueDate: { type: String, required: true },
     budget: { type: Number, required: true },
