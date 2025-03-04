@@ -25,7 +25,7 @@ const TransactionSchema = new mongoose.Schema(
     amount: { type: Number, required: true },
     status: {
       type: String,
-      enum: ["completed", "failed", "settled", "on_hold"],
+      enum: ["completed", "failed", "settled", "on_hold", "pending"],
       default: "completed",
     },
     RefundedId: { type: String },

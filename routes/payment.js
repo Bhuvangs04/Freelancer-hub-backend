@@ -3,6 +3,7 @@ const { verifyToken, authorize } = require("../middleware/Auth");
 const Razorpay = require("razorpay");
 const mongoose = require("mongoose");
 const FreelancerEscrowSchema = require("../models/FreelancerEscrow");
+const AdminWithdrawSchema = require("../models/WithdrawReportsAdmin");
 const router = express.Router();
 const Payment = require("../models/Payment");
 const Escrow = require("../models/Escrow");
@@ -447,6 +448,12 @@ router.post(
         "freelancerId",
         "email username"
       );
+      await Ongoing.findOneAndUpdate(
+        { projectId: project_id },
+        {
+          $set: { status: "on-hold" },
+        }
+      );
       if (!project) {
         return res.status(404).json({ message: "Project not found" });
       }
@@ -482,6 +489,81 @@ router.post(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+// Freelancer withdraw route
+
+router.post(
+  "/freelancer/withdraw/balance",
+  verifyToken,
+  authorize(["freelancer"]),
+  async (req, res) => {
+    try {
+      const freelancerId = req.user.userId;
+      const { accountNumber, accountName, ifscCode, amount } = req.body;
+
+      if (!accountNumber || !accountName || !ifscCode || !amount) {
+        return res.status(400).json({ message: "All fields are required." });
+      }
+
+      if (amount < 500) {
+        return res.status(400).json({ message: "Minimum withdrawal is $500." });
+      }
+
+      // Get freelancer's escrow balance
+      const escrows = await FreelancerEscrowSchema.find({
+        freelancerId: freelancerId,
+      });
+
+      const totalBalance = escrows.reduce((sum, e) => sum + e.amount, 0);
+      if (!escrows || totalBalance < amount) {
+        return res.status(400).json({ message: "Insufficient balance." });
+      }
+
+      let remainingAmount = amount;
+      for (const escrow of escrows) {
+        if (remainingAmount <= 0) break;
+
+        if (escrow.amount <= remainingAmount) {
+          remainingAmount -= escrow.amount;
+          escrow.amount = 0;
+          escrow.status = "withdraw";
+        } else {
+          escrow.amount -= remainingAmount;
+          remainingAmount = 0;
+        }
+        await escrow.save();
+      }
+
+      const adminWithdraw = await AdminWithdrawSchema.create({
+        freelancerId,
+        type: "withdraw",
+        amount: amount,
+        status: "pending",
+        description: `New withdrawal request for ₹${amount}`,
+        bankDetails: { accountNumber, accountName, ifscCode },
+      });
+
+      // Record withdrawal transaction
+      const transaction = new Transaction({
+        escrowId: adminWithdraw._id,
+        freelancerId,
+        type: "withdrawal",
+        amount,
+        status: "pending",
+        description: `Withdrawal request of ₹${amount}`,
+      });
+
+      await transaction.save();
+
+      return res.status(200).json({
+        message: `Withdrawal of ₹${amount} initiated.`,
+      });
+    } catch (error) {
+      console.error("Withdraw Error:", error);
+      return res.status(500).json({ message: "Internal server error." });
     }
   }
 );

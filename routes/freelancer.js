@@ -62,6 +62,69 @@ router.get(
 );
 
 router.get(
+  "/wallet/details",
+  verifyToken,
+  authorize(["freelancer"]),
+  async (req, res) => {
+    try {
+      const freelancerId = req.user.userId;
+
+      // Fetch freelancer's escrow records
+      const escrows = await FreelancerEscrow.find({ freelancerId });
+
+      // Fetch transactions for each escrow
+      const escrowTransactions = await Promise.all(
+        escrows.map(async (escrow) => {
+          const transactions = await Transaction.find({ escrowId: escrow._id });
+          return { transactions };
+        })
+      );
+
+      // Fetch freelancer's projects
+      const projects = await Project.find({ freelancerId });
+
+      // Fetch ongoing projects (tasks are embedded inside these documents)
+      const ongoingProjects = await Ongoing.find({
+        projectId: { $in: projects.map((p) => p._id) },
+      });
+
+      // Calculate progress for each project
+      const projectsWithProgress = projects.map((project) => {
+        const ongoingProject = ongoingProjects.find(
+          (op) => op.projectId === project._id.toString()
+        );
+
+        if (ongoingProject) {
+          const totalTasks = ongoingProject.tasks.length;
+          const completedTasks = ongoingProject.tasks.filter(
+            (task) => task.completed
+          ).length;
+          const progress =
+            totalTasks > 0
+              ? Math.round((completedTasks / totalTasks) * 100)
+              : 0;
+
+          return {
+            ...project.toObject(),
+            progress, // Add calculated progress
+          };
+        }
+
+        return { ...project.toObject(), progress: 0 }; // Default progress if no tasks found
+      });
+
+      return res.status(200).json({
+        transactions: escrowTransactions,
+        projects: projectsWithProgress,
+      });
+    } catch (error) {
+      console.error("Error fetching wallet details:", error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+router.get(
   "/oldProjects",
   verifyToken,
   authorize(["freelancer"]),
@@ -87,7 +150,7 @@ router.patch(
     try {
       const { projectId, status } = req.params;
 
-      const projectDetails = await Project.find({
+      const projectDetails = await Project.findOne({
         _id: projectId,
         status: "completed",
       });
@@ -220,7 +283,7 @@ router.post(
 );
 
 router.post(
-  "/freelancer/client-rating/:projectId",
+  "/client-rating/:projectId",
   verifyToken,
   authorize(["freelancer"]),
   async (req, res) => {
@@ -296,6 +359,8 @@ router.get(
 const UserSkill = require("../models/UserSkill");
 const OldProject = require("../models/OldProjects");
 const Ongoing = require("../models/OnGoingProject.Schema");
+const Transaction = require("../models/Transaction");
+const FreelancerEscrow = require("../models/FreelancerEscrow");
 router.post(
   "/freelancer/update",
   verifyToken,
