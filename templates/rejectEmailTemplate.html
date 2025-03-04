@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Rejected</title>
+  <style>
+    /* Reset styles for email clients */
+    body, html {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+      line-height: 1.6;
+      color: #333333;
+      background-color: #f9f9f9;
+    }
+    
+    * {
+      box-sizing: border-box;
+    }
+    
+    /* Email container */
+    .email-container {
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    
+    /* Header section */
+    .header {
+      background-color: #e53e3e;
+      padding: 25px 30px;
+      text-align: center;
+    }
+    
+    .header-logo {
+      font-size: 24px;
+      font-weight: bold;
+      color: #ffffff;
+      margin: 0;
+    }
+    
+    /* Content section */
+    .content {
+      padding: 35px 30px;
+    }
+    
+    .greeting {
+      font-size: 18px;
+      margin-bottom: 20px;
+      color: #111111;
+    }
+    
+    .message {
+      margin-bottom: 25px;
+      font-size: 16px;
+      color: #333333;
+    }
+    
+    .project-title {
+      font-weight: bold;
+      color: #111111;
+    }
+    
+    /* Button styles */
+    .button-container {
+      text-align: center;
+      margin: 30px 0;
+    }
+    
+    .button {
+      display: inline-block;
+      background-color: #e53e3e;
+      color: #ffffff;
+      text-decoration: none;
+      padding: 12px 25px;
+      border-radius: 4px;
+      font-weight: bold;
+      font-size: 16px;
+    }
+    
+    /* Feedback section */
+    .feedback-section {
+      background-color: #f9f9f9;
+      padding: 20px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+    }
+    
+    .feedback-title {
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: #111111;
+    }
+    
+    /* Footer section */
+    .footer {
+      background-color: #f2f2f2;
+      padding: 20px 30px;
+      text-align: center;
+      color: #666666;
+      font-size: 14px;
+    }
+    
+    .footer p {
+      margin: 5px 0;
+    }
+    
+    .social-icons {
+      margin: 15px 0;
+    }
+    
+    .social-icon {
+      display: inline-block;
+      margin: 0 5px;
+      color: #666666;
+      text-decoration: none;
+    }
+    
+    /* Responsive design */
+    @media screen and (max-width: 600px) {
+      .email-container {
+        width: 100%;
+        border-radius: 0;
+      }
+      
+      .content, .header, .footer {
+        padding: 20px 15px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="email-container">
+    <div class="header">
+      <h1 class="header-logo">FreelancerHub</h1>
+    </div>
+    
+    <div class="content">
+      <p class="greeting">Hello {{freelancerName}},</p>
+      
+      <p class="message">
+        We regret to inform you that your submission for the project titled 
+        <span class="project-title">"{{projectTitle}}"</span> has been rejected.
+      </p>
+      
+      <p class="message">
+        The client has provided the following feedback to help you improve your submission:
+      </p>
+      
+      <div class="feedback-section">
+        <p class="feedback-title">Client Feedback:</p>
+        <p>{{clientFeedback}}</p>
+      </div>
+      
+      <p class="message">
+        We encourage you to review your work based on this feedback, make the necessary improvements, 
+        and resubmit your work. Our goal is to ensure that both you and the client are satisfied with the final result.
+      </p>
+      
+      <div class="button-container">
+        <a href="{{loginUrl}}" class="button">Login & Chat with Client</a>
+      </div>
+      
+      <p class="message">
+        If you have any questions or need further clarification, please don't hesitate to reach out to our support team.
+      </p>
+    </div>
+    
+    <div class="footer">
+      <p>Need assistance? Contact our <a href="{{supportUrl}}">support team</a>.</p>
+      <div class="social-icons">
+        <a href="{{twitterUrl}}" class="social-icon">Twitter</a>
+        <a href="{{linkedinUrl}}" class="social-icon">LinkedIn</a>
+        <a href="{{instagramUrl}}" class="social-icon">Instagram</a>
+      </div>
+      <p>&copy; 2025 FreelancerHub. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>

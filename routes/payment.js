@@ -9,8 +9,11 @@ const Escrow = require("../models/Escrow");
 const Transaction = require("../models/Transaction");
 const Project = require("../models/Project");
 const axios = require("axios");
+const sendEmail = require("../utils/sendEmail");
 const crypto = require("crypto");
 const Activity = require("../models/ActionSchema");
+const fs = require("fs");
+const path = require("path");
 const Ongoing = require("../models/OnGoingProject.Schema");
 
 const logActivity = async (userId, action) => {
@@ -25,6 +28,32 @@ const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
+
+const sendRejectionEmail = async (
+  freelancerEmail,
+  freelancerName,
+  projectTitle,
+  clientFeedback
+) => {
+  const subject = "Project Rejected";
+
+  // Read the HTML template
+  const templatePath = path.join(
+    __dirname,
+    "../templates/rejectEmailTemplate.html"
+  );
+  let emailTemplate = fs.readFileSync(templatePath, "utf8");
+
+  // Replace placeholders with actual values
+  emailTemplate = emailTemplate
+    .replace("{{freelancerName}}", freelancerName)
+    .replace("{{projectTitle}}", projectTitle)
+    .replace("{{loginUrl}}", "http://localhost:8080/sign-in")
+    .replace("{{clientFeedback}}", clientFeedback);
+
+  // Send email
+  await sendEmail(freelancerEmail, subject, emailTemplate, true);
+};
 
 // Create payment order
 router.post(
@@ -404,6 +433,59 @@ router.post(
     }
   }
 );
+
+router.post(
+  "/reject-project/:project_id",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    try {
+      const { project_id } = req.params;
+      const { clientFeedback } = req.body;
+      // Find the project and populate freelancer details
+      const project = await Project.findById(project_id).populate(
+        "freelancerId",
+        "email username"
+      );
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      // Ensure the client is the owner of the project
+      if (project.clientId.toString() !== req.user.userId) {
+        return res.status(403).json({ message: "Unauthorized action" });
+      }
+
+      // Update project status
+      project.status = "rejected";
+      await project.save();
+
+      // Notify the freelancer via email
+      if (project.freelancerId && project.freelancerId.email) {
+        await sendRejectionEmail(
+          project.freelancerId.email,
+          project.freelancerId.username,
+          project.title,
+          clientFeedback
+        );
+      }
+
+      // Log activity
+      await logActivity(
+        req.user.userId,
+        `Project rejected (Title: ${project.title}) and informed the freelancer`
+      );
+
+      res
+        .status(200)
+        .json({ message: "Project rejected and freelancer notified" });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
 
 
 module.exports = router;
