@@ -171,7 +171,7 @@ router.post(
 );
 
 router.post(
-  "/client/company",
+  "/company",
   verifyToken,
   authorize(["client"]),
   async (req, res) => {
@@ -337,7 +337,7 @@ router.post(
 
 // Update Profile Picture
 router.post(
-  "/client/update-profile-picture",
+  "/pictureUpdate",
   verifyToken,
   authorize(["client"]),
   upload.single("file"),

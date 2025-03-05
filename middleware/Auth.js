@@ -1,6 +1,14 @@
-const { errorMonitor } = require("http-proxy");
 const JWT = require("jsonwebtoken");
 const Secret = "SecureOnlyPassword";
+const Action = require("../models/ActionSchema");
+
+const logActivity = async (userId, action) => {
+  try {
+    await Action.create({ userId, action });
+  } catch (error) {
+    console.error("Error logging activity:", error);
+  }
+};
 
 async function createTokenForUser(user) {
   const payload = {
@@ -43,9 +51,23 @@ async function verifyToken(req, res, next) {
   }
 }
 
-const authorize = (roles) => (req, res, next) => {
-  if (!roles.includes(req.user.role))
-    return res.status(403).send({ message: "Forbidden" });
-  next();
+const authorize = (roles) => async (req, res, next) => {
+  try {
+    if (!roles.includes(req.user.role)) {
+      await logActivity(
+        req.user.userId,
+        "Attempted to access forbidden routes or pages."
+      );
+      return res.status(403).json({
+        message: "Forbidden",
+        error: "You do not have the necessary permissions.",
+      });
+    }
+    next();
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Internal Server Error" });
+  }
 };
+
 module.exports = { createTokenForUser, verifyToken, authorize };

@@ -14,6 +14,7 @@ const workSubmission = require("./routes/WorkSubmission");
 const client = require("./routes/client");
 const payment = require("./routes/payment");
 const admin = require("./routes/admin");
+const security = require("./routes/Security");
 const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cookieParser());
@@ -69,6 +70,8 @@ app.use("/api/vi/freelancer", freelancer);
 app.use("/api/vi/chat", chats);
 app.use("/api/vi/payments", payment);
 app.use("/api/vi/worksubmission", workSubmission);
+app.use("/api/vi/security", security);
+
 
 
 app.listen(PORT,() => {
