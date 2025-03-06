@@ -70,12 +70,14 @@ console.log(tokenDetails.role);
   }
 });
 
-router.get("/logout", verifyToken,async (req, res) => {
+router.get("/logout", verifyToken, async (req, res) => {
   res.clearCookie("token", {
     sameSite: "None",
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",})
+    secure: true,
+    path: "/",
   });
+  res.json({ message: "Logout successful" });
+});
 
     
 router.post("/verify-chatting-id", verifyToken, async (req, res) => {

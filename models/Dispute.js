@@ -2,20 +2,21 @@ const mongoose = require("mongoose");
 
 const DisputeSchema = new mongoose.Schema(
   {
+    userID: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
     projectId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Project",
-      required: true,
     },
     clientId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
     },
     freelancerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
     },
     raisedBy: { type: String, enum: ["client", "freelancer"], required: true },
     reason: { type: String, required: true },
@@ -25,6 +26,7 @@ const DisputeSchema = new mongoose.Schema(
       default: "open",
     },
     resolution: { type: String },
+    file_url: { type: String, required: true },
     resolvedByAdminId: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
   },
   { timestamps: true }
