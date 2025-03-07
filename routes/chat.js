@@ -221,16 +221,44 @@ wss.on("connection", (ws, req) => {
 
   ws.on("message", async (data) => {
     try {
-      const { sender, receiver, message, alreadyStored, type } =
-        JSON.parse(data);
+        console.log("Raw WebSocket message:", data);
+        const messageString = data.toString();
 
-      if (type === "typing") {
-        const recipientSocket = activeUsers.get(receiver);
-        if (recipientSocket) {
-          recipientSocket.send(JSON.stringify({ sender, type: "typing" }));
+        const parsedData = JSON.parse(messageString);
+
+        const { sender, receiver, message, alreadyStored, type } =
+          JSON.parse(data);
+
+        if (type === "typing") {
+          const recipientSocket = activeUsers.get(receiver);
+          if (recipientSocket) {
+            recipientSocket.send(JSON.stringify({ sender, type: "typing" }));
+          }
+          return;
         }
-        return;
-      }
+
+        const webRTCTypes = [
+          "connection-request",
+          "connection-accepted",
+          "connection-rejected",
+          "candidate",
+          "answer",
+          "offer",
+        ];
+
+        if (webRTCTypes.includes(type)) {
+          console.log(`Received ${type} message:`, parsedData);
+          const recipientSocket = activeUsers.get(receiver);
+          if (recipientSocket) {
+            recipientSocket.send(JSON.stringify(parsedData));
+            console.log(`${type} message sent to ${receiver}`);
+          } else {
+            console.error(
+              `No active WebSocket found for receiver: ${receiver}`
+            );
+          }
+          return;
+        }
 
       const encryptedMessage = encryptMessage(message, secretKey);
       let chat;
