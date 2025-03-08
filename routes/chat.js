@@ -208,7 +208,7 @@ router.get("/messages", verifyToken, async (req, res) => {
 });
 
 // WebSocket setup
-const wss = new WebSocket.Server({ port: 9000 });
+const wss = new WebSocket.Server({ port: process.env.PORT || 9000 });
 
 wss.on("connection", (ws, req) => {
   const userId = req.url?.split("/").pop();
