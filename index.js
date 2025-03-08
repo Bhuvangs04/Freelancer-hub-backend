@@ -58,6 +58,7 @@ app.use(cors(corsOptions));
 
 // Explicitly handle preflight requests
 app.options("*", cors(corsOptions));
+
 app.use(helmet());
 
 app.use((req, res, next) => {
