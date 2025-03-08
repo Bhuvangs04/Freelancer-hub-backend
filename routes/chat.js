@@ -9,6 +9,7 @@ const router = express.Router();
 const secretKey = Buffer.from(process.env.ENCRYPTION_KEY, "hex");
 const activeUsers = new Map();
 
+
 // Sensitive info middleware
 const checkSensitiveInfo = async (req, res, next) => {
   const { message, sender } = req.body;
@@ -207,20 +208,19 @@ router.get("/messages", verifyToken, async (req, res) => {
   }
 });
 
-// WebSocket setup
-const wss = new WebSocket.Server({ port: process.env.PORT || 9000 });
 
-wss.on("connection", (ws, req) => {
-  const userId = req.url?.split("/").pop();
-  if (!userId) {
-    ws.close();
-    return;
-  }
+const initializeWebSocket = (wss) => {
+  wss.on("connection", (ws, req) => {
+    const userId = req.url?.split("/").pop();
+    if (!userId) {
+      ws.close();
+      return;
+    }
 
-  activeUsers.set(userId, ws);
+    activeUsers.set(userId, ws);
 
-  ws.on("message", async (data) => {
-    try {
+    ws.on("message", async (data) => {
+      try {
         console.log("Raw WebSocket message:", data);
         const messageString = data.toString();
 
@@ -260,48 +260,51 @@ wss.on("connection", (ws, req) => {
           return;
         }
 
-      const encryptedMessage = encryptMessage(message, secretKey);
-      let chat;
+        const encryptedMessage = encryptMessage(message, secretKey);
+        let chat;
 
-      if (!alreadyStored) {
-        chat = new Chat({
-          sender,
-          receiver,
-          message: encryptedMessage,
-          encrypted: true,
-          status: "sent",
-        });
-        await chat.save();
-      }
-
-      const recipientSocket = activeUsers.get(receiver);
-      if (recipientSocket) {
-        recipientSocket.send(
-          JSON.stringify({
+        if (!alreadyStored) {
+          chat = new Chat({
             sender,
             receiver,
             message: encryptedMessage,
-            status: "delivered",
-          })
-        );
-        if (chat) {
-          chat.status = "delivered";
+            encrypted: true,
+            status: "sent",
+          });
           await chat.save();
         }
+
+        const recipientSocket = activeUsers.get(receiver);
+        if (recipientSocket) {
+          recipientSocket.send(
+            JSON.stringify({
+              sender,
+              receiver,
+              message: encryptedMessage,
+              status: "delivered",
+            })
+          );
+          if (chat) {
+            chat.status = "delivered";
+            await chat.save();
+          }
+        }
+      } catch (error) {
+        console.error("Error processing WebSocket message:", error);
       }
-    } catch (error) {
-      console.error("Error processing WebSocket message:", error);
-    }
-  });
+    });
 
-  ws.on("close", () => {
-    activeUsers.delete(userId);
-  });
+    ws.on("close", () => {
+      activeUsers.delete(userId);
+    });
 
-  ws.on("error", (error) => {
-    console.error("WebSocket error:", error);
-    activeUsers.delete(userId);
+    ws.on("error", (error) => {
+      console.error("WebSocket error:", error);
+      activeUsers.delete(userId);
+    });
   });
-});
+}
 
-module.exports = router;
+module.exports = { router, initializeWebSocket };
+
+

@@ -5,10 +5,11 @@ const cors = require("cors");
 const { mongoose } = require('./config/database');
 const helmet = require('helmet');
 const loginRoute = require('./routes/Login');
-const signupRoute = require('./routes/Sign-up');
-const uploadRoute = require('./routes/bucketSending');
-const freelancer = require('./routes/freelancer');
-const chats = require('./routes/chat'); 
+const http = require("http");
+const WebSocket = require("ws");
+const signupRoute = require("./routes/Sign-up");
+const uploadRoute = require("./routes/bucketSending");
+const freelancer = require("./routes/freelancer");
 const workSubmission = require("./routes/WorkSubmission");
 // const auditLogs = require("./middleware/AuditLogs");  no need for this
 const client = require("./routes/client");
@@ -26,6 +27,13 @@ const allowedOrigins = [
 ];
 
 app.disable("x-powered-by"); // Removes "X-Powered-By" header
+
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
+const { router: chatRoutes, initializeWebSocket } = require("./routes/chat");
+
+initializeWebSocket(wss);
 
 app.use((req, res, next) => {
   res.removeHeader("X-Powered-By");
@@ -71,7 +79,7 @@ app.use("/api/vi", signupRoute);
 app.use("/api/vi", uploadRoute);
 app.use("/api/vi/admin", admin);
 app.use("/api/vi/freelancer", freelancer);
-app.use("/api/vi/chat", chats);
+app.use("/api/vi/chat", chatRoutes);
 app.use("/api/vi/payments", payment);
 app.use("/api/vi/worksubmission", workSubmission);
 app.use("/api/vi/security", security);
