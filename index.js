@@ -64,7 +64,7 @@ app.use((req, res, next) => {
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// WebSocket setup (moved from initializeWebSocket for simplicity)
+// WebSocket setup
 wss.on("connection", (ws, req) => {
   const chatId = req.url.split("/chat/")[1] || "unknown";
   console.log(`[WEBSOCKET] Client connected to chat: ${chatId}`);
@@ -80,14 +80,6 @@ wss.on("connection", (ws, req) => {
 
   ws.on("error", (error) => {
     console.error(`[WEBSOCKET] Error for ${chatId}: ${error}`);
-  });
-});
-
-// Log upgrade requests for debugging
-server.on("upgrade", (req, socket, head) => {
-  console.log(`[WEBSOCKET] Upgrade request received for: ${req.url}`);
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit("connection", ws, req);
   });
 });
 
@@ -111,7 +103,7 @@ app.use("/api/vi/payments", payment);
 app.use("/api/vi/worksubmission", workSubmission);
 app.use("/api/vi/security", security);
 
-// Chat routes (assuming it’s HTTP-based, WebSocket is handled separately)
+// Chat routes (HTTP-based)
 const { router: chatRoutes } = require("./routes/chat");
 app.use("/api/vi/chat", chatRoutes);
 
