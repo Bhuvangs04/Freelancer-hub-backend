@@ -24,6 +24,9 @@ const allowedOrigins = [
   "https://freelancerhub-loadbalancer.vercel.app/",
   "https://freelancerhub-five.vercel.app/",
   "https://freelancer-admin.vercel.app/",
+  "https://freelancerhub-loadbalancer.vercel.app",
+  "https://freelancerhub-five.vercel.app",
+  "https://freelancer-admin.vercel.app",
 ];
 
 app.disable("x-powered-by"); // Removes "X-Powered-By" header
