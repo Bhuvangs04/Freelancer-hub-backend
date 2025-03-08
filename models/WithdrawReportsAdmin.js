@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 
 const AdminWithdrawSchema = new mongoose.Schema({
-  freelancerId: { type: String, required: true },
+  freelancerId: { type: String, required: true, ref: "User" },
   type: { type: String, enum: ["income", "withdraw"], required: true },
   amount: { type: Number, required: true },
   status: {

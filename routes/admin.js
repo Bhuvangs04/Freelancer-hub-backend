@@ -1,20 +1,24 @@
 const express = require("express");
 const { verifyToken, authorize } = require("../middleware/Auth");
 const Transaction = require("../models/Transaction");
-const AccountDetails = require("../models/AccountDetail");
-const Escrow = require("../models/Escrow");
+const DisputeSchema = require("../models/Dispute");
 const Razorpay = require("razorpay");
 const router = express.Router();
 const User = require("../models/User");
 const Project = require("../models/Project");
-const DisputeSchema = require("../models/Dispute");
 const { uploadFile } = require("../utils/S3");
-const FundAccount = require("../models/FundAccount");
 const fileType = require("file-type");
 const Action = require("../models/ActionSchema");
+const PaymentSchema = require("../models/Payment");
 const multer = require("multer");
+const ExcelJS = require("exceljs");
 const upload = multer();
 const axios = require("axios"); // Model for storing Fund Account details
+const AdminWithdrawSchema = require("../models/WithdrawReportsAdmin");
+
+if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+  throw new Error("Razorpay credentials are not configured");
+}
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -49,21 +53,73 @@ const scanFile = async (file, allowedTypes, maxSize) => {
   return type;
 };
 
-// Example: Get all users
-router.get("/users", verifyToken, authorize(["admin"]), async (req, res) => {
-  try {
-    const users = await User.find().select(
-      "-password -__v -isBanned -banExpiresAt -bio -resumeUrl"
-    );
-    res.json({ users });
-  } catch (err) {
-    res.status(500).send("Error fetching users");
+router.get(
+  "/dashboard-overview",
+  verifyToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    try {
+      // Fetch total users
+      const totalUsers = await User.countDocuments();
+
+      // Fetch total revenue (sum of all completed transactions)
+      const totalRevenue = await Transaction.aggregate([
+        { $match: { status: "completed" } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]);
+      const revenue = totalRevenue.length > 0 ? totalRevenue[0].total : 0;
+
+      // Fetch quick stats
+      const activeFreelancers = await User.countDocuments({
+        role: "freelancer",
+        status: "active",
+      });
+      const suspendedAccounts = await User.countDocuments({
+        status: "suspended",
+      });
+      const completedProjects = await Project.countDocuments({
+        status: "completed",
+      });
+      const pendingReviews = await Project.countDocuments({
+        status: "in_progress",
+      });
+
+      res.json({
+        totalUsers,
+        revenue,
+        quickStats: {
+          activeFreelancers,
+          suspendedAccounts,
+          completedProjects,
+          pendingReviews,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching dashboard data:", error);
+      res.status(500).json({ message: "Error fetching dashboard data" });
+    }
   }
-});
+);
+
+router.get(
+  "/get/users",
+  verifyToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    try {
+      const users = await User.find().select(
+        "-password -__v  -banExpiresAt -bio -resumeUrl"
+      );
+      res.json({ users });
+    } catch (err) {
+      res.status(500).send("Error fetching users");
+    }
+  }
+);
 
 // Example: Ban user temporarily
 router.post(
-  "/ban-user/:userId/ban-temporary",
+  "/ban-user/:status/:userId",
   verifyToken,
   authorize(["admin"]),
   async (req, res) => {
@@ -72,6 +128,7 @@ router.post(
       const user = await User.findById(userId);
       if (!user) return res.status(404).json({ message: "User not found" });
       user.isBanned = true;
+      user.isbanDate = Date.now();
       user.banExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       await user.save();
       res.json({ message: "User banned successfully for 7 days" });
@@ -82,7 +139,7 @@ router.post(
 );
 
 router.post(
-  "/ban-user/:userId/ban-permanent",
+  "/ban_user/:userId/ban_permanent",
   verifyToken,
   authorize(["admin"]),
   async (req, res) => {
@@ -91,6 +148,7 @@ router.post(
       const user = await User.findById(userId);
       if (!user) return res.status(404).json({ message: "User not found" });
       user.isBanned = true;
+      user.isbanDate = Date.now();
       await user.save();
       res.json({ message: "User banned successfully" });
     } catch (err) {
@@ -100,7 +158,7 @@ router.post(
 );
 
 router.post(
-  "/relase-ban-user/:userId/realsed",
+  "/relase_ban_user/:userId/realsed/false",
   verifyToken,
   authorize(["admin"]),
   async (req, res) => {
@@ -109,6 +167,7 @@ router.post(
       const user = await User.findById(userId);
       if (!user) return res.status(404).json({ message: "User not found" });
       user.isBanned = false;
+      user.isbanDate = null;
       user.banExpiresAt = null;
       await user.save();
       res.json({ message: "User ban released successfully" });
@@ -119,168 +178,178 @@ router.post(
 );
 
 router.get(
+  "/all/transaction",
+  verifyToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    try {
+      const all = await PaymentSchema.find().populate("userId", "username");
+      res.status(200).json(all);
+    } catch (error) {
+      console.log(error);
+      res.status(500).send({ message: "Error while activating account" });
+    }
+  }
+);
+
+router.get(
+  "/transaction/:projectId",
+  verifyToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    try {
+      const { projectId } = req.params;
+      const all = await PaymentSchema.findOne({ projectId }).populate(
+        "userId projectId",
+        "username title budget "
+      );
+      res.status(200).json(all);
+    } catch (error) {
+      console.log(error);
+      res.status(500).send({ message: "Error while activating account" });
+    }
+  }
+);
+
+router.get(
+  "/get/trasacntion/excel",
+  verifyToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    try {
+      const transactions = await PaymentSchema.find().populate(
+        "userId projectId",
+        "username title budget "
+      );
+
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("Transactions");
+
+      // Define columns
+      worksheet.columns = [
+        { header: "Username", key: "username", width: 20 },
+        { header: "Transaction ID", key: "transactionId", width: 25 },
+        { header: "Project ID", key: "projectId", width: 25 },
+        { header: "Project Name", key: "title", width: 25 },
+        { header: "Project Budget", key: "budget", width: 15 },
+        { header: "Amount", key: "amount", width: 15 },
+        { header: "Payment Method", key: "paymentMethod", width: 20 },
+        { header: "Status", key: "status", width: 15 },
+        { header: "Created At", key: "createdAt", width: 25 },
+      ];
+
+      // Add rows
+      transactions.forEach((transaction) => {
+        worksheet.addRow({
+          username: transaction.userId.username,
+          transactionId: transaction.transactionId,
+          projectId: transaction.projectId._id,
+          title: transaction.projectId.title,
+          budget: transaction.projectId.budget,
+          amount: transaction.amount,
+          paymentMethod: transaction.paymentMethod,
+          status: transaction.status,
+          createdAt: new Date(transaction.createdAt).toLocaleString(),
+        });
+      });
+
+      // Set response headers
+      res.setHeader(
+        "Content-Disposition",
+        "attachment; filename=transactions.xlsx"
+      );
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+
+      // Send the workbook as a response
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error("Error generating Excel file:", error);
+      res.status(500).json({ error: "Internal Server Error" });
+    }
+  }
+);
+
+router.get(
+  "/payout/excel",
+  verifyToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    try {
+      const transactions = await AdminWithdrawSchema.find().populate(
+        "freelancerId",
+        "username"
+      );
+
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("Transactions");
+
+      // Define columns
+      worksheet.columns = [
+        { header: "Freelancer Id", key: "freelancerId", width: 25 },
+        { header: "Username", key: "username", width: 25 },
+        { header: "Type", key: "type", width: 15 },
+        { header: "Amount", key: "amount", width: 20 },
+        { header: "Status", key: "status", width: 20 },
+        { header: "Description", key: "description", width: 50 },
+        { header: "CreatedAt", key: "createdAt", width: 25 },
+        { header: "Account Number", key: "accountNumber", width: 20 },
+        { header: "IFSC code", key: "ifscCode", width: 25 },
+      ];
+
+      // Add rows
+      transactions.forEach((transaction) => {
+        worksheet.addRow({
+          freelancerId: transaction.freelancerId._id,
+          username: transaction.freelancerId.username,
+          type: transaction.type,
+          amount: transaction.amount,
+          status: transaction.status,
+          description: transaction.description,
+          createdAt: new Date(transaction.createdAt).toLocaleString(),
+          accountNumber: transaction.bankDetails.accountNumber,
+          ifscCode: transaction.bankDetails.ifscCode,
+        });
+      });
+
+      // Set response headers
+      res.setHeader(
+        "Content-Disposition",
+        "attachment; filename=transactions.xlsx"
+      );
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+
+      // Send the workbook as a response
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Payout processing failed" });
+    }
+  }
+);
+
+router.get(
   "/pay-out/freelancers",
   verifyToken,
   authorize(["admin"]),
   async (req, res) => {
     try {
-      const releasedPayments = await Escrow.find({
-        status: "released",
-      }).populate("freelancerId");
+      const payouts = await AdminWithdrawSchema.find().populate(
+        "freelancerId",
+        "username"
+      );
 
-      if (!releasedPayments.length) {
-        return res.status(404).json({ message: "No released payments found" });
-      }
-
-      res.json({ releasedPayments });
+      res.json({ payouts });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Server error" });
-    }
-  }
-);
-
-router.post("/create-fund-account/:userId", verifyToken, async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    // Get user details from DB
-    const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    // Step 1: Create a Razorpay Contact (Required before creating a Fund Account)
-    const contactResponse = await axios.post(
-      "https://api.razorpay.com/v1/contacts",
-      {
-        name: user.username || "Test Freelancer",
-        email: user.email || "test@freelancer.com",
-        contact: user.phone || "9999999999",
-        type: "employee",
-        reference_id: `${userId}`,
-      },
-      {
-        auth: {
-          username: process.env.RAZORPAY_KEY_ID,
-          password: process.env.RAZORPAY_KEY_SECRET,
-        },
-      }
-    );
-
-    const contactId = contactResponse.data.id;
-
-    const accountDetails = await AccountDetails.findOne({ userId });
-    if (!accountDetails) {
-      return res.status(404).json({ message: "Account details not found" });
-    }
-
-    const fundAccountResponse = await axios.post(
-      "https://api.razorpay.com/v1/fund_accounts",
-      {
-        contact_id: contactId,
-        account_type: accountDetails.accountType,
-        bank_account: {
-          name: user.username || "Test Account",
-          ifsc: accountDetails.ifscCode,
-          account_number: accountDetails.accountNumber,
-        },
-      },
-      {
-        auth: {
-          username: process.env.RAZORPAY_KEY_ID,
-          password: process.env.RAZORPAY_KEY_SECRET,
-        },
-      }
-    );
-
-    const fundAccountId = fundAccountResponse.data.id;
-
-    // Step 3: Store Fund Account Details in MongoDB
-    const fundAccount = new FundAccount({
-      userId,
-      fundAccountId,
-      contactId,
-      bankDetails: {
-        accountNumber: accountDetails.accountNumber,
-        ifsc: accountDetails.ifscCode || "KARB0007104",
-        name: user.username || "Test Account",
-      },
-    });
-
-    await fundAccount.save();
-
-    res.json({
-      message: "Fund account created successfully",
-      fundAccountId,
-      contactId,
-    });
-  } catch (error) {
-    console.error(error);
-    console.error(
-      "Error creating fund account:",
-      error.response?.data || error
-    );
-    res.status(500).json({ message: "Failed to create fund account" });
-  }
-});
-
-router.post(
-  "/pay-out/freelancers/bulk",
-  verifyToken,
-  authorize(["admin"]),
-  async (req, res) => {
-    try {
-      const releasedPayments = await Escrow.find({ status: "released" });
-
-      if (!releasedPayments.length) {
-        return res.status(404).json({ message: "No released payments found" });
-      }
-
-      let payouts = [];
-      for (const payment of releasedPayments) {
-        const freelancer = await FundAccount.findOne({
-          userId: payment.freelancerId,
-        });
-
-        if (!freelancer || !freelancer.fundAccountId) {
-          console.warn(
-            `No Razorpay fund account found for freelancer ${payment.freelancerId}`
-          );
-          continue;
-        }
-
-        const amountAfterCommission = Math.floor(payment.amount * 0.9 * 100); // Deduct 10% commission
-
-        const payout = await razorpay.payouts.create({
-          fund_account_id: freelancer.fundAccountId,
-          amount: amountAfterCommission,
-          currency: "INR",
-          mode: "IMPS",
-          purpose: "payout",
-          queue_if_low_balance: true,
-          reference_id: `payout_${payment._id}`,
-          narration: "Freelancer Payout",
-        });
-
-        payouts.push(payout);
-
-        // Update Escrow status to "paid"
-        payment.status = "paid";
-        await payment.save();
-
-        // Save transaction record
-        await new Transaction({
-          userId: payment.freelancerId,
-          escrowId: payment._id,
-          type: "withdrawal",
-          amount: amountAfterCommission / 100,
-          status: "completed",
-        }).save();
-      }
-
-      res.json({ message: "Payouts processed successfully", payouts });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Payout processing failed" });
     }
   }
 );
@@ -293,52 +362,49 @@ router.post(
   async (req, res) => {
     try {
       const { freelancerId } = req.params;
-      const payment = await Escrow.findOne({
-        freelancerId,
-        status: "released",
-      });
 
-      if (!payment) {
+      const payment = await AdminWithdrawSchema.findOne({ freelancerId }).sort({
+        createdAt: -1,
+      });
+      if (!payment || payment.status !== "pending") {
         return res
           .status(404)
-          .json({ message: "No released funds for this freelancer" });
+          .json({ message: "No pending payout request found" });
       }
 
-      const freelancer = await FundAccount.findOne({ userId: freelancerId });
-
-      if (!freelancer || !freelancer.fundAccountId) {
-        return res
-          .status(400)
-          .json({ message: "Freelancer fund account not found" });
-      }
-
-      const amountAfterCommission = Math.floor(payment.amount * 0.9 * 100); // Deduct 10% commission
-
-      const payout = await razorpay.payouts.create({
-        fund_account_id: freelancer.fundAccountId,
-        amount: amountAfterCommission,
-        currency: "INR",
-        mode: "IMPS",
-        purpose: "payout",
-        queue_if_low_balance: true,
-        reference_id: `payout_${payment._id}`,
-        narration: "Freelancer Payout",
-      });
-
-      // Update Escrow status to "paid"
-      payment.status = "paid";
-      await payment.save();
-
-      // Save transaction record
-      await new Transaction({
-        userId: freelancerId,
+      const transaction = await Transaction.findOne({
         escrowId: payment._id,
         type: "withdrawal",
-        amount: amountAfterCommission / 100,
-        status: "completed",
-      }).save();
+      }).sort({ createdAt: -1 });
+      // Deduct 10% commission
 
-      res.json({ message: "Payout successful", payout });
+      // Update payment status manually
+      payment.status = "approved";
+      await payment.save();
+
+      transaction.status = "completed";
+      await transaction.save();
+
+      res.json({
+        message: "Payout processed manually",
+        amountPaid: amountAfterCommission,
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ message: "Payout processing failed" });
+    }
+  }
+);
+
+router.get(
+  "/get/disputes",
+  verifyToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    try {
+      const AllReports = await DisputeSchema.find();
+
+      res.status(200).json(AllReports);
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Payout processing failed" });
@@ -434,7 +500,7 @@ router.post(
         "image/webp",
       ];
       await scanFile(evidence, allowedTypes, 5 * 1024 * 1024);
-       let project_output = null;
+      let project_output = null;
       if (projectId) {
         project_output = await Project.findOne({
           _id: projectId,

@@ -3,22 +3,22 @@ const router = express.Router();
 const User = require("../models/User");
 const OTP = require("../models/OTP"); // Model for storing OTPs
 const sendEmail = require("../utils/sendEmail"); // Utility to send emails
-const bcrypt = require("bcryptjs");
+const Admin = require("../models/Admin");
 
-router.post("/send-otp" ,async (req, res) => {
+router.post("/send-otp", async (req, res) => {
   const { email } = req.body;
   try {
     if (!email) return res.status(400).json({ message: "Email is required." });
     const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-const otpEntry = await OTP.findOne({ email });
+    const otpEntry = await OTP.findOne({ email });
 
-if (otpEntry) {
-  otpEntry.otp = otpCode;
-  otpEntry.createdAt = Date.now();
-  await otpEntry.save();
-} else {
-  await new OTP({ email, otp: otpCode, createdAt: Date.now() }).save();
-}
+    if (otpEntry) {
+      otpEntry.otp = otpCode;
+      otpEntry.createdAt = Date.now();
+      await otpEntry.save();
+    } else {
+      await new OTP({ email, otp: otpCode, createdAt: Date.now() }).save();
+    }
 
     await sendEmail(
       email,
@@ -66,12 +66,13 @@ router.post("/verify-otp", async (req, res) => {
 router.post("/signup", async (req, res) => {
   const { username, password, email, role } = req.body;
   try {
-    if (!username || !password || !email || !role ) {
+    if (!username || !password || !email || !role) {
       return res.status(400).json({ message: "All fields are required." });
     }
 
     const validOtp = await OTP.findOne({ email, isVerified: true });
-    if (!validOtp) return res.status(400).json({ message: "Invalid or unverified OTP." });
+    if (!validOtp)
+      return res.status(400).json({ message: "Invalid or unverified OTP." });
 
     const existingUser = await User.findOne({ $or: [{ username }, { email }] });
     if (existingUser) {
@@ -90,6 +91,38 @@ router.post("/signup", async (req, res) => {
 
     await newUser.save();
     await OTP.deleteOne({ email });
+    res.status(201).json({ message: "Signup successful." });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal server error." });
+  }
+});
+
+router.post("/signup/admin", async (req, res) => {
+  const { username, password, email, secret_code } = req.body;
+  try {
+    if (!username || !password || !email || !secret_code) {
+      return res.status(400).json({ message: "All fields are required." });
+    }
+
+    const existingUser = await Admin.findOne({
+      $or: [{ username }, { email }],
+    });
+    if (existingUser) {
+      return res
+        .status(409)
+        .json({ message: "Username or email already exists." });
+    }
+
+    const newUser = new Admin({
+      username,
+      password,
+      email,
+      role: "admin",
+      secret_code,
+    });
+
+    await newUser.save();
     res.status(201).json({ message: "Signup successful." });
   } catch (error) {
     console.error(error);

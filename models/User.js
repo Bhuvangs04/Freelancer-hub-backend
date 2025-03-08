@@ -11,7 +11,8 @@ const UserSchema = new mongoose.Schema(
     bio: { type: String },
     role: { type: String, enum: ["freelancer", "client"], required: true },
     isBanned: { type: Boolean, default: false },
-    otpVerified:{type:Boolean,default:false},
+    isbanDate: { type: Date },
+    otpVerified: { type: Boolean, default: false },
     banExpiresAt: { type: Date },
     Strikes: { type: Number, default: 0 },
     status: {
@@ -21,7 +22,7 @@ const UserSchema = new mongoose.Schema(
     },
     companyName: { type: String },
     Position: { type: String },
-    Industry : { type: String },
+    Industry: { type: String },
   },
   { timestamps: true }
 );

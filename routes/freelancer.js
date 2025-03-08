@@ -7,6 +7,7 @@ const User = require("../models/User");
 const BidSchema = require("../models/Bid");
 const Project = require("../models/Project");
 const fileType = require("file-type");
+const AdminWithdrawSchema = require("../models/WithdrawReportsAdmin");
 const ReviewSchema = require("../models/Review");
 const OldProjectsSchema = require("../models/OldProjects");
 const Action = require("../models/ActionSchema");
@@ -72,6 +73,8 @@ router.get(
       // Fetch freelancer's escrow records
       const escrows = await FreelancerEscrow.find({ freelancerId });
 
+      const adminEscrows = await AdminWithdrawSchema.find({ freelancerId });
+
       // Fetch transactions for each escrow
       const escrowTransactions = await Promise.all(
         escrows.map(async (escrow) => {
@@ -79,6 +82,17 @@ router.get(
           return { transactions };
         })
       );
+
+      const adminTransactions = await Promise.all(
+        adminEscrows.map(async (adminEscrow) => {
+          const transactions = await Transaction.find({
+            escrowId: adminEscrow._id,
+          });
+          return { escrowId: adminEscrow._id, transactions };
+        })
+      );
+
+      const mergedTransactions = [...escrowTransactions, ...adminTransactions];
 
       // Fetch freelancer's projects
       const projects = await Project.find({ freelancerId });
@@ -114,7 +128,7 @@ router.get(
       });
 
       return res.status(200).json({
-        transactions: escrowTransactions,
+        transactions: mergedTransactions,
         projects: projectsWithProgress,
       });
     } catch (error) {
@@ -508,7 +522,7 @@ router.post(
         return res.status(404).json({ message: "Freelancer not found" });
 
       const folderName = "User-Resume";
-      const filename = `${folderName}/${userId}-resume.pdf`;
+      const filename = `${folderName}/${userId}-${freelancer.username}-resume.pdf`;
 
       // Delete old resume if it exists
       if (freelancer.resumeUrl) {

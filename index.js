@@ -19,7 +19,11 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
-const allowedOrigins = ["http://localhost:8080", "http://localhost:4000"];
+const allowedOrigins = [
+  "http://localhost:8080",
+  "http://localhost:8081",
+  "http://localhost:4000",
+];
 
 app.disable("x-powered-by"); // Removes "X-Powered-By" header
 
