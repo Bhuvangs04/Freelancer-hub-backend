@@ -2,6 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const Chat = require("../models/chat_sys");
 const User = require("../models/User");
+const activeUsers = require("../utils/activeUsers");
 const { verifyToken } = require("../middleware/Auth");
 
 const router = express.Router();
