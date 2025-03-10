@@ -7,6 +7,7 @@ const helmet = require("helmet");
 const loginRoute = require("./routes/Login");
 const http = require("http");
 const WebSocket = require("ws");
+const activeUsers = require("./utils/activeUsers"); // Import activeUsers
 const signupRoute = require("./routes/Sign-up");
 const uploadRoute = require("./routes/bucketSending");
 const freelancer = require("./routes/freelancer");
@@ -69,7 +70,7 @@ const wss = new WebSocket.Server({ server });
 
 // WebSocket setup
 const secretKey = Buffer.from(process.env.ENCRYPTION_KEY, "hex");
-const activeUsers = new Map();
+//const activeUsers =  new Map();
 
 const encryptMessage = (message, key) => {
   const iv = crypto.randomBytes(12);
