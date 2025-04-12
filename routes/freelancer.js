@@ -303,7 +303,7 @@ router.post(
   async (req, res) => {
     try {
       const { projectId } = req.params;
-      const { rating, comment } = req.body;
+      const { rating, comments } = req.body;
       const project = await Project.findById(projectId);
       if (!project)
         return res.status(404).json({ message: "Project not found" });
@@ -316,13 +316,13 @@ router.post(
         reviewerId: project.clientId,
         projectId,
         rating,
-        comment,
+        comments,
       });
       await review.save();
       res.json({ message: "Rating submitted successfully" });
     } catch (error) {
       console.log(error);
-      res.status(500).send({ message: "Error submitting rating" });
+      res.status(503).send({ message: "Error submitting rating" });
     }
   }
 );
