@@ -357,7 +357,7 @@ router.post(
           .json({ message: "Insufficient funds to release" });
       }
 
-      const project = await Project.find({
+      const project = await Project.findOne({
         _id: project_id,
         status: "in_progress",
       });
