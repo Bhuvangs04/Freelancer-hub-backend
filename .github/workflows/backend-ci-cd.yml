@@ -23,7 +23,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          cd backend  # Navigate to the backend directory
           npm install
 
 
