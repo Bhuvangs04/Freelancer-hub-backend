@@ -111,37 +111,41 @@ router.post(
 
 router.get("/ongoing/projects", verifyToken, async (req, res) => {
   try {
-    const projects = await OnGoingSchema.find({ clientId: req.user.userId });
+    const ongoingProjects = await OnGoingSchema.find({
+      clientId: req.user.userId,
+    });
 
-    // Fetch the latest 5 messages for each freelancer in the projects
-    const projectsWithMessages = await Promise.all(
-      projects.map(async (project) => {
-        const messages = await ChatSchema.find({
-          $or: [
-            { sender: project.freelancerId, receiver: req.user.userId }, // Messages from freelancer to client
-            { sender: req.user.userId, receiver: project.freelancerId }, // Messages from client to freelancer
-          ],
-        })
-          .sort({ timestamp: -1 })
-          .limit(5);
-        const totalTasks = project.tasks.length;
-        const completedTasks = project.tasks.filter(
-          (task) => task.completed
-        ).length;
-        const progress =
-          totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+    const filteredProjects = [];
 
-        return { ...project._doc, messages, progress }; // Merge messages with project data
+    for (const ongoing of ongoingProjects) {
+      const project = await Project.findById(ongoing.projectId);
+      if (!project || project.status === "completed") continue;
+
+      const messages = await ChatSchema.find({
+        $or: [
+          { sender: ongoing.freelancerId, receiver: req.user.userId },
+          { sender: req.user.userId, receiver: ongoing.freelancerId },
+        ],
       })
-    );
+        .sort({ timestamp: -1 })
+        .limit(5);
 
-    res.status(200).json(projectsWithMessages);
+      const totalTasks = ongoing.tasks.length;
+      const completedTasks = ongoing.tasks.filter(
+        (task) => task.completed
+      ).length;
+      const progress =
+        totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+      filteredProjects.push({ ...ongoing._doc, messages, progress });
+    }
+
+    res.status(200).json(filteredProjects);
   } catch (error) {
     console.log(error);
     res.status(500).send({ message: "Error fetching projects" });
   }
 });
-
 
 router.post(
   "/client/:freelancerId/reject",
@@ -638,7 +642,6 @@ router.get(
   }
 );
 
-
 router.get(
   "/projects/active",
   verifyToken,
@@ -717,54 +720,57 @@ router.get(
   }
 );
 
-router.get("/all/freelancers",verifyToken,authorize(["client"]), async (req, res) => {
-  try {
-    const freelancers = await User.find({ role: "freelancer" }).select(
-      "username bio profilePictureUrl status"
-    );
+router.get(
+  "/all/freelancers",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    try {
+      const freelancers = await User.find({ role: "freelancer" }).select(
+        "username bio profilePictureUrl status"
+      );
 
-    const freelancerIds = freelancers.map((freelancer) => freelancer._id);
+      const freelancerIds = freelancers.map((freelancer) => freelancer._id);
 
-    // Fetch old projects and skills with only required fields
-    const [oldProjects, userSkills] = await Promise.all([
-      OldProjectsSchema.find({ freelancerId: { $in: freelancerIds } }).select(
-        "title description frameworks link freelancerId"
-      ),
-      UserSkillSchema.find({ userId: { $in: freelancerIds } }).select(
-        "skills.name skills.proficiency userId"
-      ),
-    ]);
+      // Fetch old projects and skills with only required fields
+      const [oldProjects, userSkills] = await Promise.all([
+        OldProjectsSchema.find({ freelancerId: { $in: freelancerIds } }).select(
+          "title description frameworks link freelancerId"
+        ),
+        UserSkillSchema.find({ userId: { $in: freelancerIds } }).select(
+          "skills.name skills.proficiency userId"
+        ),
+      ]);
 
-    // Attach filtered old projects and skills to each freelancer
-    const freelancerData = freelancers.map((freelancer) => {
-      return {
-        ...freelancer.toObject(),
-        oldProjects: oldProjects
-          .filter(
-            (project) =>
-              project.freelancerId.toString() === freelancer._id.toString()
-          )
-          .map(({ title, description, frameworks, link }) => ({
-            title,
-            description,
-            frameworks,
-            link,
-          })),
-        skills: userSkills
-          .filter(
-            (skill) => skill.userId.toString() === freelancer._id.toString()
-          )
-          .map(({ skills }) => skills),
-      };
-    });
-      await logActivity(req.user.userId, "Viewed all freelancers");
- 
-    res.status(200).json({ freelancers: freelancerData });
-  } catch (error) {
-    console.error("Error fetching freelancers:", error);
-    res.status(500).send({ message: "Error fetching freelancers" });
+      // Attach filtered old projects and skills to each freelancer
+      const freelancerData = freelancers.map((freelancer) => {
+        return {
+          ...freelancer.toObject(),
+          oldProjects: oldProjects
+            .filter(
+              (project) =>
+                project.freelancerId.toString() === freelancer._id.toString()
+            )
+            .map(({ title, description, frameworks, link }) => ({
+              title,
+              description,
+              frameworks,
+              link,
+            })),
+          skills: userSkills
+            .filter(
+              (skill) => skill.userId.toString() === freelancer._id.toString()
+            )
+            .map(({ skills }) => skills),
+        };
+      });
+      res.status(200).json({ freelancers: freelancerData });
+    } catch (error) {
+      console.error("Error fetching freelancers:", error);
+      res.status(500).send({ message: "Error fetching freelancers" });
+    }
   }
-});
+);
 
 /// Pagenation Code
 // router.get(

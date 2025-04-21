@@ -100,6 +100,7 @@ router.post("/signup", async (req, res) => {
 
 router.post("/signup/admin", async (req, res) => {
   const { username, password, email, secret_code } = req.body;
+  console.log("Admin signup route hit");
   try {
     if (!username || !password || !email || !secret_code) {
       return res.status(400).json({ message: "All fields are required." });

@@ -256,6 +256,8 @@ router.delete(
         }
       );
 
+      console.log("Refund Response:", refundResponse);
+
       // Update escrow status
       escrow.status = "refunded";
       await escrow.save();
@@ -318,7 +320,6 @@ router.post(
   }
 );
 
-// Client releases funds to freelancer
 router.post(
   "/release-payment",
   verifyToken,
@@ -357,7 +358,7 @@ router.post(
           .json({ message: "Insufficient funds to release" });
       }
 
-      const project = await Project.find({
+      const project = await Project.findOne({
         _id: project_id,
         status: "in_progress",
       });

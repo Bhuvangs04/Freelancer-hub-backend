@@ -299,7 +299,7 @@ router.post(
 router.post(
   "/client-rating/:projectId",
   verifyToken,
-  authorize(["freelancer"]),
+  authorize(["freelancer", "client"]),
   async (req, res) => {
     try {
       const { projectId } = req.params;
