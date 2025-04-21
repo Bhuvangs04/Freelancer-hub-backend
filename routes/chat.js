@@ -6,6 +6,8 @@ const { verifyToken } = require("../middleware/Auth");
 
 const router = express.Router();
 const secretKey = Buffer.from(process.env.ENCRYPTION_KEY, "hex");
+const activeUsers = new Map();
+
 
 // Sensitive info middleware
 const checkSensitiveInfo = async (req, res, next) => {
