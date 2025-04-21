@@ -69,7 +69,7 @@ app.use("/api/vi/client", client);
 app.use("/api/vi", loginRoute);
 app.use("/api/vi", signupRoute);
 app.use("/api/vi", uploadRoute);
-app.use("/api/vi/admin", admin);
+app.use("/admin", admin);
 app.use("/api/vi/freelancer", freelancer);
 app.use("/api/vi/chat", chats);
 app.use("/api/vi/payments", payment);
