@@ -7,7 +7,7 @@ const ReviewSchema = new mongoose.Schema({
   reviewedId: { type: String, required: true, ref: "User" }, // User who receives the review
   projectId: { type: String, required: true, ref: "Project" }, // Associated project
   rating: { type: Number, required: true, min: 1, max: 5 }, // Rating from 1 to 5
-  comment: { type: String, required: true, trim: true }, // Review text
+  comments: { type: String, required: true, trim: true }, // Review text
   createdAt: { type: Date, default: Date.now }, // Timestamp
 });
 

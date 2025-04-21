@@ -303,20 +303,18 @@ router.post(
   async (req, res) => {
     try {
       const { projectId } = req.params;
-      const { rating, comment } = req.body;
+      const { rating, comments } = req.body;
       const project = await Project.findById(projectId);
       if (!project)
         return res.status(404).json({ message: "Project not found" });
-      if (project.status != "completed")
-        return res
-          .status(400)
-          .json({ message: "Project is not completed yet" });
+      if (project.status != "in_progress")
+        return res.status(400).json({ message: "Project is not yet started" });
       const review = new ReviewSchema({
         reviewedId: req.user.userId,
         reviewerId: project.clientId,
         projectId,
         rating,
-        comment,
+        comments,
       });
       await review.save();
       res.json({ message: "Rating submitted successfully" });
