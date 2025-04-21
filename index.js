@@ -23,6 +23,9 @@ const allowedOrigins = [
   "http://localhost:8080",
   "http://localhost:8081",
   "http://localhost:4000",
+  "freelancerhub-five.vercel.app",
+  "freelancerhub-loadbalancer.vercel.app",
+  "freelancer-admin.vercel.app",
 ];
 
 app.disable("x-powered-by"); // Removes "X-Powered-By" header
