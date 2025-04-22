@@ -376,6 +376,40 @@ const FreelancerEscrow = require("../models/FreelancerEscrow");
 const PortfolioView = require("../models/PortfolioView");
 const requestIp = require("request-ip");
 const geoip = require("geoip-lite");
+const sendEmail = require("../utils/sendEmail");
+
+router.post("/contact/send-email", async (req, res) => {
+  try {
+    const { name, email, freelanceremail, subject, message } = req.body;
+
+    if (!email || !subject || !message || !name) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    const html = `
+      <div style="font-family: Arial, sans-serif; padding: 20px;">
+        <h2 style="color: #4f46e5;">New Message from ${name}</h2>
+        <p><strong>Subject:</strong> ${subject}</p>
+        <p><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p>
+        <div style="margin-top: 15px; padding: 10px; background-color: #f9fafb; border-left: 4px solid #4f46e5;">
+          <p style="margin: 0; white-space: pre-line;">${message}</p>
+        </div>
+        <p style="margin-top: 20px; font-size: 12px; color: #666;">
+          This message was sent via your portfolio contact form.
+        </p>
+        <p style="font-size: 12px; color: #666;">
+          <a href="https://freelancerhub.com" style="color: #4f46e5; text-decoration: none;">FreelancerHub</a>
+        </p>
+      </div>
+    `;
+
+    await sendEmail(freelanceremail, subject, html);
+    res.status(200).json({ success: true, message: "Email sent successfully" });
+  } catch (error) {
+    console.error("Error sending contact form email:", error);
+    res.status(500).json({ success: false, message: "Failed to send email" });
+  }
+});
 
 router.get(
   "/freelancer/portfolio/:username/freelancer/view",
