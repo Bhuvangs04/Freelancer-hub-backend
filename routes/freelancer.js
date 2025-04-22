@@ -420,7 +420,7 @@ router.get(
       const geo = geoip.lookup(ip) || {};
 
       const freelancer = await User.findOne({ username }).select(
-        "experiences profilePictureUrl username email"
+        "experiences profilePictureUrl username email bio location title"
       );
       if (!freelancer)
         return res.status(404).json({ message: "Freelancer not found" });
@@ -476,6 +476,39 @@ router.get(
   }
 );
 
+router.get(
+  "/freelancer/portfolio/report",
+  verifyToken,
+  authorize(["freelancer"]),
+  async (req, res) => {
+    try {
+      const { freelancerId } = req.query;
+      if (!freelancerId || freelancerId !== req.user.userId) {
+        return res.status(403).json({ message: "Freelancer ID is required" });
+      }
+      const portfolioViews = await PortfolioView.find({
+        freelancerId: req.user.userId,
+      }).populate("freelancerId", "username email");
+      if (!portfolioViews || portfolioViews.length === 0) {
+        return res.status(404).json({ message: "No portfolio views found" });
+      }
+      const viewCount = portfolioViews.length;
+      const viewDetails = portfolioViews.map((view) => ({
+        ip: view.ip,
+        location: view.location,
+        timestamp: view.timestamp,
+      }));
+      res.status(200).json({
+        viewCount,
+        viewDetails,
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).send({ message: "Error fetching portfolio report" });
+    }
+  }
+);
+
 router.post(
   "/freelancer/update",
   verifyToken,
@@ -484,9 +517,9 @@ router.post(
     const userId = req.user.userId;
 
     try {
-      const { bio, skills, projects, experiences } = req.body;
+      const { bio, skills, projects, experiences, location, title } = req.body;
 
-      if (!bio && !skills && !projects) {
+      if (!bio && !skills && !projects && !experiences && !location && !title) {
         return res.status(400).json({ message: "No updates provided" });
       }
 
@@ -551,6 +584,14 @@ router.post(
 
         profile.experiences = Array.from(existingExperienceMap.values());
       }
+
+      if (location) {
+        profile.location = location;
+      }
+      if (title) {
+        profile.title = title;
+      }
+      // Save the updated profile
 
       // Update Projects (Only Insert New Ones)
       if (projects) {

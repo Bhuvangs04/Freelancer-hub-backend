@@ -13,6 +13,11 @@ const UserSchema = new mongoose.Schema(
     isBanned: { type: Boolean, default: false },
     isbanDate: { type: Date },
     otpVerified: { type: Boolean, default: false },
+    location: {
+      type: String,
+      default: "Not specified",
+    },
+    title: { type: String, default: "Freelancer" },
     experiences: {
       type: [
         {
