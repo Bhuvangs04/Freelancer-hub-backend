@@ -398,7 +398,7 @@ router.post("/contact/send-email", async (req, res) => {
           This message was sent via your portfolio contact form.
         </p>
         <p style="font-size: 12px; color: #666;">
-          <a href="https://freelancerhub.com" style="color: #4f46e5; text-decoration: none;">FreelancerHub</a>
+          <a href="https://freelancerhub-five.vercel.app" style="color: #4f46e5; text-decoration: none;">FreelancerHub</a>
         </p>
       </div>
     `;
