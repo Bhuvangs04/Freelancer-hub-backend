@@ -13,8 +13,20 @@ const UserSchema = new mongoose.Schema(
     isBanned: { type: Boolean, default: false },
     isbanDate: { type: Date },
     otpVerified: { type: Boolean, default: false },
+    experiences: {
+      type: [
+        {
+          company: { type: String, required: true },
+          role: { type: String, required: true },
+          period: { type: String, required: true },
+          description: { type: String },
+        },
+      ],
+      default: [],
+    },
     banExpiresAt: { type: Date },
     Strikes: { type: Number, default: 0 },
+    portflio: { type: String, default: "" },
     status: {
       type: String,
       enum: ["Available", "active", "Busy", "Away"],

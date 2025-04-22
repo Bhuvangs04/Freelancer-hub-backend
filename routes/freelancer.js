@@ -373,6 +373,75 @@ const OldProject = require("../models/OldProjects");
 const Ongoing = require("../models/OnGoingProject.Schema");
 const Transaction = require("../models/Transaction");
 const FreelancerEscrow = require("../models/FreelancerEscrow");
+const PortfolioView = require("../models/PortfolioView");
+const requestIp = require("request-ip");
+const geoip = require("geoip-lite");
+
+router.get(
+  "/freelancer/portfolio/:username/freelancer/view",
+  async (req, res) => {
+    try {
+      const { username } = req.params;
+      const ip = requestIp.getClientIp(req);
+      const geo = geoip.lookup(ip) || {};
+
+      const freelancer = await User.findOne({ username }).select(
+        "experiences profilePictureUrl username email"
+      );
+      if (!freelancer)
+        return res.status(404).json({ message: "Freelancer not found" });
+
+      // Count this month's views
+      const currentMonth = new Date();
+      const startOfMonth = new Date(
+        currentMonth.getFullYear(),
+        currentMonth.getMonth(),
+        1
+      );
+      const viewCount = await PortfolioView.countDocuments({
+        freelancerId: freelancer._id,
+        timestamp: { $gte: startOfMonth },
+      });
+
+      // Limit: 500 free-tier views per month
+      if (viewCount >= 1500) {
+        return res
+          .status(429)
+          .json({ message: "View limit exceeded for this month." });
+      }
+
+      // Log the view
+      await PortfolioView.create({
+        freelancerId: freelancer._id,
+        ip,
+        location: {
+          country: geo.country,
+          region: geo.region,
+          city: geo.city,
+        },
+      });
+
+      const skills = await UserSkill.findOne({ userId: freelancer._id }).select(
+        "skills"
+      );
+      const oldProjects = await OldProject.find({
+        freelancerId: freelancer._id,
+      }).select("title description link framework");
+
+      res.status(200).json({
+        freelancer: {
+          ...freelancer.toObject(),
+          skills: skills ? skills.skills : [],
+          oldProjects: oldProjects || [],
+        },
+      });
+    } catch (error) {
+      console.error(error);
+      res.status(500).send({ message: "Error fetching freelancer portfolio" });
+    }
+  }
+);
+
 router.post(
   "/freelancer/update",
   verifyToken,
@@ -381,7 +450,7 @@ router.post(
     const userId = req.user.userId;
 
     try {
-      const { bio, skills, projects } = req.body;
+      const { bio, skills, projects, experiences } = req.body;
 
       if (!bio && !skills && !projects) {
         return res.status(400).json({ message: "No updates provided" });
@@ -411,7 +480,10 @@ router.post(
 
           userSkills.skills = Array.from(
             existingSkillMap,
-            ([name, proficiency]) => ({ name, proficiency })
+            ([name, proficiency]) => ({
+              name,
+              proficiency,
+            })
           );
         } else {
           userSkills = new UserSkill({
@@ -424,6 +496,26 @@ router.post(
         }
 
         await userSkills.save();
+      }
+
+      if (experiences) {
+        if (!profile.experiences) profile.experiences = [];
+
+        const existingExperienceMap = new Map(
+          profile.experiences.map((exp) => [
+            `${exp.company.toLowerCase()}-${exp.role.toLowerCase()}`,
+            exp,
+          ])
+        );
+
+        experiences.forEach((exp) => {
+          const key = `${exp.company.toLowerCase()}-${exp.role.toLowerCase()}`;
+          if (!existingExperienceMap.has(key)) {
+            existingExperienceMap.set(key, exp); // Add new experience
+          }
+        });
+
+        profile.experiences = Array.from(existingExperienceMap.values());
       }
 
       // Update Projects (Only Insert New Ones)
