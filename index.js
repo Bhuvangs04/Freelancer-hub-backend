@@ -1,5 +1,7 @@
 const express = require("express");
 const app = express();
+const http = require("http");
+const server = http.createServer(app); 
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
 const { mongoose } = require("./config/database");
@@ -75,10 +77,7 @@ const WebSocket = require("ws");
 
 const wss = new WebSocket.Server({ server });
  
- // WebSocket setup
- wss.on("connection", (ws, req) => {
-   const chatId = req.url.split("/chat/")[1] || "unknown";
-   console.log(`[WEBSOCKET] Client connected to chat: ${chatId}`);
+
  const secretKey = Buffer.from(process.env.ENCRYPTION_KEY, "hex");
  const activeUsers = new Map();
  
@@ -95,9 +94,7 @@ const wss = new WebSocket.Server({ server });
    )}`;
  };
  
-   ws.on("message", (message) => {
-     console.log(`[WEBSOCKET] Received from ${chatId}: ${message}`);
-     ws.send(`Echo: ${message}`); // Echo for testing
+  
  const decryptMessage = (encryptedMessage, key) => {
    try {
      const [ivHex, encryptedText, authTagHex] = encryptedMessage.split(":");
@@ -200,13 +197,11 @@ const wss = new WebSocket.Server({ server });
    });
  
    ws.on("close", () => {
-     console.log(`[WEBSOCKET] Client disconnected from chat: ${chatId}`);
      activeUsers.delete(userId);
      console.log(`[WEBSOCKET] Client disconnected: ${userId}`);
    });
  
    ws.on("error", (error) => {
-     console.error(`[WEBSOCKET] Error for ${chatId}: ${error}`);
      console.error(`[WEBSOCKET] Error for ${userId}:`, error);
      activeUsers.delete(userId);
    });
@@ -223,6 +218,6 @@ app.use("/api/vi/payments", payment);
 app.use("/api/vi/worksubmission", workSubmission);
 app.use("/api/vi/security", security);
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
