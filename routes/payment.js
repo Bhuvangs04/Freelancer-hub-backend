@@ -49,7 +49,7 @@ const sendRejectionEmail = async (
   emailTemplate = emailTemplate
     .replace("{{freelancerName}}", freelancerName)
     .replace("{{projectTitle}}", projectTitle)
-    .replace("{{loginUrl}}", "http://localhost:8080/sign-in")
+    .replace("{{loginUrl}}", "https://freelancerhub-five.vercel.app/sign-in")
     .replace("{{clientFeedback}}", clientFeedback);
 
   // Send email
