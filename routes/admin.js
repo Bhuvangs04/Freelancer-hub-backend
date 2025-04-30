@@ -243,8 +243,8 @@ router.get(
         worksheet.addRow({
           username: transaction.userId?.username || "Unknown",
           transactionId: transaction.transactionId,
-          projectId: transaction.projectId._id? || "N/A",
-          title: transaction.projectId.title? || "N/A",
+          projectId: transaction.projectId?._id || "N/A",
+          title: transaction.projectId?.title || "N/A",
           budget: transaction.projectId.budget,
           amount: transaction.amount,
           paymentMethod: transaction.paymentMethod,
