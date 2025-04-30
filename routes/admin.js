@@ -387,7 +387,6 @@ router.post(
 
       res.json({
         message: "Payout processed manually",
-        amountPaid: amountAfterCommission,
       });
     } catch (error) {
       console.error(error);
