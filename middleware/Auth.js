@@ -30,8 +30,8 @@ async function verifyToken(req, res, next) {
       errorStatus: "Forbidden",
       errorDescription: "You are not authorized to access this resource.",
       errorMonitor: "PublicVisibleBanned",
-      errorSolution: "Please login to access this resource.",
-      errorReference: "http://localhost:8080/sign-in",
+      errorSolution: "Please login to access this resource/Page/Request.",
+      errorReference: "https://freelancerhub-five.vercel.app/sign-in",
       errorDate: new Date().toISOString(),
       errorIp: req.ip,
       errorMethod: req.method,
@@ -56,7 +56,7 @@ const authorize = (roles) => async (req, res, next) => {
     if (!roles.includes(req.user.role)) {
       await logActivity(
         req.user.userId,
-        "Attempted to access forbidden routes or pages."
+        `Attempted to access forbidden routes or pages.This route allowed to only ${roles}.`
       );
       return res.status(403).json({
         message: "Forbidden",
