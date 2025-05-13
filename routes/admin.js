@@ -13,17 +13,17 @@ const PaymentSchema = require("../models/Payment");
 const multer = require("multer");
 const ExcelJS = require("exceljs");
 const upload = multer();
-const axios = require("axios"); // Model for storing Fund Account details
+// const axios = require("axios"); // Model for storing Fund Account details
 const AdminWithdrawSchema = require("../models/WithdrawReportsAdmin");
 
 if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
   throw new Error("Razorpay credentials are not configured");
 }
 
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+// const razorpay = new Razorpay({
+//   key_id: process.env.RAZORPAY_KEY_ID,
+//   key_secret: process.env.RAZORPAY_KEY_SECRET,
+// });
 
 const logActivity = async (userId, action) => {
   try {

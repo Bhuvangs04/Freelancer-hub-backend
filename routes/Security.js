@@ -11,6 +11,7 @@ security.post(
     try {
       res.status(200).send({ message: true });
     } catch (error) {
+      console.error(error);
       return res.status(403).send({ message: "Server is unavailable" });
     }
   }
@@ -25,6 +26,7 @@ security.post(
     try {
       res.status(200).send({ message: true });
     } catch (error) {
+      console.error(error);
       return res.status(403).send({ message: "Server is unavailable" });
     }
   }

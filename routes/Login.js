@@ -81,87 +81,87 @@ router.post("/:userDetails/login", async (req, res) => {
   }
 });
 
-const cosineSimilarity = (vecA, vecB) => {
-  if (
-    !Array.isArray(vecA) ||
-    !Array.isArray(vecB) ||
-    vecA.length === 0 ||
-    vecB.length === 0
-  ) {
-    throw new Error(
-      "Invalid input: One or both vectors are undefined, empty, or not arrays"
-    );
-  }
-  if (vecA.length !== vecB.length) {
-    throw new Error("Vector lengths do not match");
-  }
+// const cosineSimilarity = (vecA, vecB) => {
+//   if (
+//     !Array.isArray(vecA) ||
+//     !Array.isArray(vecB) ||
+//     vecA.length === 0 ||
+//     vecB.length === 0
+//   ) {
+//     throw new Error(
+//       "Invalid input: One or both vectors are undefined, empty, or not arrays"
+//     );
+//   }
+//   if (vecA.length !== vecB.length) {
+//     throw new Error("Vector lengths do not match");
+//   }
 
-  const dotProduct = vecA.reduce((sum, val, i) => sum + val * vecB[i], 0);
-  const magnitudeA = Math.sqrt(vecA.reduce((sum, val) => sum + val * val, 0));
-  const magnitudeB = Math.sqrt(vecB.reduce((sum, val) => sum + val * val, 0));
+//   const dotProduct = vecA.reduce((sum, val, i) => sum + val * vecB[i], 0);
+//   const magnitudeA = Math.sqrt(vecA.reduce((sum, val) => sum + val * val, 0));
+//   const magnitudeB = Math.sqrt(vecB.reduce((sum, val) => sum + val * val, 0));
 
-  return magnitudeA && magnitudeB ? dotProduct / (magnitudeA * magnitudeB) : 0;
-};
+//   return magnitudeA && magnitudeB ? dotProduct / (magnitudeA * magnitudeB) : 0;
+// };
 
-router.post("/verify", verifyToken, authorize(["admin"]), async (req, res) => {
-  const { faceEmbeddings } = req.body;
-  const admin = await Admin.findOne({ _id: req.user.userId });
+// router.post("/verify", verifyToken, authorize(["admin"]), async (req, res) => {
+//   const { faceEmbeddings } = req.body;
+//   const admin = await Admin.findOne({ _id: req.user.userId });
 
-  if (!admin) return res.status(404).json({ error: "Admin not found" });
+//   if (!admin) return res.status(404).json({ error: "Admin not found" });
 
-  // Compare embeddings (Euclidean distance or cosine similarity)
-  const similarity = cosineSimilarity(faceEmbeddings, admin.faceEmbedding);
+//   // Compare embeddings (Euclidean distance or cosine similarity)
+//   const similarity = cosineSimilarity(faceEmbeddings, admin.faceEmbedding);
 
-  console.log(similarity);
+//   console.log(similarity);
 
-  if (similarity > 0.85) {
-    res.json({ success: true });
-  } else {
-    res.status(401).json({ error: "Face does not match" });
-  }
-});
+//   if (similarity > 0.85) {
+//     res.json({ success: true });
+//   } else {
+//     res.status(401).json({ error: "Face does not match" });
+//   }
+// });
 
-router.post(
-  "/store-face",
-  verifyToken,
-  authorize(["admin"]),
-  async (req, res) => {
-    const { faceEmbeddings } = req.body;
+// router.post(
+//   "/store-face",
+//   verifyToken,
+//   authorize(["admin"]),
+//   async (req, res) => {
+//     const { faceEmbeddings } = req.body;
 
-    const existingAdmin = await Admin.findOne({ _id: req.user.userId });
-    if (!existingAdmin)
-      return res.status(400).json({ error: "User admin found" });
+//     const existingAdmin = await Admin.findOne({ _id: req.user.userId });
+//     if (!existingAdmin)
+//       return res.status(400).json({ error: "User admin found" });
 
-    const similarity = cosineSimilarity(
-      faceEmbeddings,
-      existingAdmin.faceEmbedding
-    );
+//     const similarity = cosineSimilarity(
+//       faceEmbeddings,
+//       existingAdmin.faceEmbedding
+//     );
 
-    console.log(similarity);
+//     console.log(similarity);
 
-    existingAdmin.faceEmbedding = faceEmbeddings;
-    await existingAdmin.save();
+//     existingAdmin.faceEmbedding = faceEmbeddings;
+//     await existingAdmin.save();
 
-    res.json({ success: true, message: "Face stored successfully" });
-  }
-);
+//     res.json({ success: true, message: "Face stored successfully" });
+//   }
+// );
 
-router.put(
-  "/update-face",
-  verifyToken,
-  authorize(["admin"]),
-  async (req, res) => {
-    const { faceEmbeddings } = req.body;
+// router.put(
+//   "/update-face",
+//   verifyToken,
+//   authorize(["admin"]),
+//   async (req, res) => {
+//     const { faceEmbeddings } = req.body;
 
-    const admin = await Admin.findOne({ _id: req.user.userId });
-    if (!admin) return res.status(404).json({ error: "Admin not found" });
+//     const admin = await Admin.findOne({ _id: req.user.userId });
+//     if (!admin) return res.status(404).json({ error: "Admin not found" });
 
-    admin.faceEmbedding = faceEmbeddings;
-    await admin.save();
+//     admin.faceEmbedding = faceEmbeddings;
+//     await admin.save();
 
-    res.json({ success: true, message: "Face updated successfully" });
-  }
-);
+//     res.json({ success: true, message: "Face updated successfully" });
+//   }
+// );
 
 router.get("/logout", verifyToken, async (req, res) => {
   res.clearCookie("token", {
