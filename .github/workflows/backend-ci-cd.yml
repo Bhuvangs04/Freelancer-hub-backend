@@ -19,13 +19,12 @@ jobs:
       - name: Set up Node.js for backend
         uses: actions/setup-node@v2
         with:
-          node-version: '14'
+          node-version: '16'
 
       - name: Install dependencies
         run: |
           npm install
 
-      - name: Lint code
+      - name: Run tests
         run: |
-          npm run lint 
-
+          npm run lint
