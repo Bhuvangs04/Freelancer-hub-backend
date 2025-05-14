@@ -30,7 +30,6 @@
     "ws": "^8.18.0"
   },
   "name": "backend",
-  "type": "module",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
