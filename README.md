@@ -42,6 +42,10 @@ Welcome to the backend repository for the Freelancer Hub website! This project i
 Create a `.env` file in the root directory and add the following environment variables:
 
 ```
+AWS_ACCESS_KEY_ID = your_aws_access_key
+AWS_BUCKET_NAME = your_s3_bucket-name
+AWS_REGION = your_aws_region
+AWS_SECRET_ACCESS_KEY  = your_aws_secret_key
 MONGO_URI=your_mongodb_uri
 JWT_SECRET=your_jwt_secret
 RAZORPAY_KEY_ID=your_razorpay_key_id
