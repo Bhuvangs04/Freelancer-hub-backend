@@ -63,7 +63,7 @@ npm run dev
 
 ## 📬 Contact
 
-For any inquiries, please reach out to us at [support@freelancerhub.com](mailto:freelancer.hub.nextgen@gmail.com).
+For any inquiries, please reach out to us at [freelancer.hub.nextgen@gmail.com](mailto:freelancer.hub.nextgen@gmail.com).
 
 ## 📜 License
 
