@@ -14,7 +14,7 @@ cron.schedule("*/2 * * * *", async () => {
         if (newProjects.length === 0) return;
 
         // Read email template
-        const templatePath = path.join(__dirname, "../templates/sendprojectNotification.html");
+        const templatePath = path.join(__dirname, "../templates/sendprojectNotifictation.html");
         let emailTemplate = fs.readFileSync(templatePath, "utf8");
 
         // Build dynamic HTML block for projects
