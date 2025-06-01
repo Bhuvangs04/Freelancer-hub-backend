@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    .project {
+      border: 1px solid #ddd;
+      padding: 10px;
+      margin-bottom: 15px;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+  <h2>Hello {{freelancerName}},</h2>
+  <p>Here are the new projects added recently:</p>
+
+  <!-- Injected dynamically -->
+  {{projectList}}
+
+  <p><a href="https://freelancerhub-five.vercel.app/sign-in">Login to apply</a></p>
+</body>
+</html>

@@ -11,6 +11,7 @@ const signupRoute = require("./routes/Sign-up");
 const uploadRoute = require("./routes/bucketSending");
 const freelancer = require("./routes/freelancer");
 const chats = require("./routes/chat");
+require("./cron/sendProjectEmails");
 const workSubmission = require("./routes/WorkSubmission");
 // const auditLogs = require("./middleware/AuditLogs");  no need for this
 const client = require("./routes/client");
