@@ -56,56 +56,13 @@ router.post(
   verifyToken,
   authorize(["client"]),
   async (req, res) => {
-    try {
-      const { freelancerId } = req.params;
-      const { projectId } = req.query;
-      const project = await Project.findOne({ _id: projectId, status: "open" });
-      if (!project)
-        return res.status(404).json({ message: "Project not found" });
-      if (project.clientId.toString() !== req.user.userId) {
-        return res.status(403).json({ message: "Unauthorized action" });
-      }
-      project.freelancerId = freelancerId;
-      project.status = "in_progress";
-      await project.save();
-      const escrow = await Escrow.findOne({
-        projectId: project._id,
-      });
-      if (!escrow) {
-        return res.status(400).json({ message: "No escrow balance available" });
-      }
-      escrow.freelancerId = freelancerId;
-      await escrow.save();
-
-      const bid = await BidSchema.findOne({
-        projectId: project._id,
-        freelancerId: freelancerId,
-      }).populate("freelancerId", "username");
-      if (!bid) {
-        return res.status(400).json({ message: "Bid not found" });
-      }
-      bid.status = "accepted";
-      const onGoingProject = new OnGoingSchema({
-        projectId: project._id,
-        clientId: project.clientId,
-        title: project.title,
-        freelancerId: freelancerId,
-        freelancer: bid.freelancerId.username,
-        status: "in-progress",
-        progress: 0,
-        dueDate: project.deadline,
-        budget: project.budget,
-        freelancerBidPrice: bid.amount,
-        description: project.description,
-      });
-      await bid.save();
-      await onGoingProject.save();
-      await logActivity(req.user.userId, "Hired a freelancer");
-      res.json({ message: "Freelancer hired successfully" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Error processing request" });
-    }
+    // DEPRECATED: Direct hiring bypasses agreement flow
+    // All hiring should now go through: Create Agreement -> Sign -> Complete
+    return res.status(400).json({
+      message: "Direct hiring is deprecated. Please use the agreement flow: Accept bid to create agreement, review terms, send for signing, and complete signatures.",
+      action: "Use the 'Accept Bid' button which creates an agreement for review and signing.",
+      redirectTo: "/agreements"
+    });
   }
 );
 

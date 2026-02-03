@@ -3,35 +3,177 @@ const router = express.Router();
 const bcrypt = require("bcrypt");
 const { verifyToken, authorize } = require("../middleware/Auth");
 const { createTokenForUser } = require("../middleware/Auth");
-const User = require("../models/User"); // Assuming you have a User model
-const Admin = require("../models/Admin"); // Assuming you have an Admin model
+const User = require("../models/User");
+const Admin = require("../models/Admin");
+const speakeasy = require("speakeasy");
 
-const xorKey = "SecureOnlyThingsAreDone"; // Keep this secure
+const xorKey = "SecureOnlyThingsAreDone";
 
-// XOR Decryption function
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+/**
+ * XOR Decryption for obfuscated credentials
+ */
 function xorDecrypt(obfuscatedString, key) {
-  let decoded = atob(obfuscatedString)
-    .split("")
-    .map((c, i) => c.charCodeAt(0) ^ key.charCodeAt(i % key.length));
-  return String.fromCharCode(...decoded); // Ensure proper string conversion
+  try {
+    let decoded = atob(obfuscatedString)
+      .split("")
+      .map((c, i) => c.charCodeAt(0) ^ key.charCodeAt(i % key.length));
+    return String.fromCharCode(...decoded);
+  } catch {
+    return null;
+  }
 }
+
+/**
+ * Get client IP address
+ */
+function getClientIp(req) {
+  return (
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.connection?.remoteAddress ||
+    req.ip ||
+    "unknown"
+  );
+}
+
+// ============================================================================
+// LOGIN ROUTES
+// ============================================================================
+
+/**
+ * POST /:userDetails/login
+ * Unified login for users and admins
+ * 
+ * For Admin (Manager):
+ * - Requires secretCode
+ * - Requires totp_code if 2FA is enabled
+ * - Account lockout after failed attempts
+ */
 router.post("/:userDetails/login", async (req, res) => {
   const { userDetails } = req.params;
-  let { email, password, secretCode } = req.body;
+  let { email, password, secretCode, totp_code } = req.body;
+
   try {
+    // Validate input types
     if (typeof email !== "string" || typeof password !== "string") {
       return res.status(400).json({ message: "Invalid request format" });
     }
+
+    // Decrypt credentials
     email = xorDecrypt(email, xorKey);
     password = xorDecrypt(password, xorKey);
+
+    if (!email || !password) {
+      return res.status(400).json({ message: "Invalid credentials format" });
+    }
+
+    const clientIp = getClientIp(req);
     let user;
+    let tokenRole;
+
+    // ================================================================
+    // ADMIN LOGIN (Enhanced Security)
+    // ================================================================
     if (userDetails === "Manager") {
-      user = await Admin.findOne({ email, secret_code: secretCode });
-      if (!user)
+      // Find admin with lockout check
+      const result = await Admin.findByCredentials(email);
+
+      if (result.error === "INVALID_CREDENTIALS") {
         return res.status(401).json({ message: "Invalid email or password" });
-    } else if (userDetails === "Client") {
-      user = await User.findOne({ email });
-      if (!user) return res.status(401).json({ message: "Invalid email" });
+      }
+
+      if (result.error === "ACCOUNT_DISABLED") {
+        return res.status(403).json({
+          message: "Account has been disabled. Contact super admin.",
+        });
+      }
+
+      if (result.error === "ACCOUNT_LOCKED") {
+        return res.status(423).json({
+          message: `Account locked. Try again in ${result.remainingMinutes} minutes.`,
+          lockedUntil: result.remainingMinutes,
+        });
+      }
+
+      const admin = result.admin;
+
+      // Verify password
+      const isPasswordValid = await admin.comparePassword(password);
+      if (!isPasswordValid) {
+        await admin.incLoginAttempts();
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      // Verify secret code
+      if (!secretCode) {
+        return res.status(400).json({ message: "Secret code is required" });
+      }
+
+      const isSecretValid = await admin.verifySecretCode(secretCode);
+      if (!isSecretValid) {
+        await admin.incLoginAttempts();
+        return res.status(401).json({ message: "Invalid email or password" });
+      }
+
+      // Check if 2FA is enabled
+      if (admin.twoFactorEnabled) {
+        if (!totp_code) {
+          return res.status(400).json({
+            message: "2FA code required",
+            requires2FA: true,
+          });
+        }
+
+        // Try TOTP verification first
+        let isTotpValid = speakeasy.totp.verify({
+          secret: admin.twoFactorSecret,
+          encoding: "base32",
+          token: totp_code.toString().trim(),
+          window: 2,
+        });
+
+        // If TOTP fails, try backup code
+        if (!isTotpValid) {
+          const backupUsed = await admin.useBackupCode(totp_code.toString().trim());
+          if (!backupUsed) {
+            await admin.incLoginAttempts();
+            return res.status(401).json({ message: "Invalid 2FA code" });
+          }
+          // Warn about backup code usage
+          console.warn(`Admin ${admin.email} used a backup code from IP: ${clientIp}`);
+        }
+      }
+
+      // Check if password change is required
+      if (admin.mustChangePassword) {
+        return res.status(403).json({
+          message: "Password change required",
+          requiresPasswordChange: true,
+        });
+      }
+
+      // Reset login attempts and update last login
+      await admin.resetLoginAttempts();
+      admin.lastLoginIp = clientIp;
+      await admin.save();
+
+      user = admin;
+      tokenRole = "admin";
+    }
+    // ================================================================
+    // USER LOGIN (Client/Freelancer)
+    // ================================================================
+    else if (userDetails === "Client") {
+      user = await User.findOne({ email: email.toLowerCase() });
+
+      if (!user) {
+        return res.status(401).json({ message: "Invalid email" });
+      }
+
+      // Check ban status
       if (user.isBanned) {
         return res.status(403).json({
           message: "Account is banned due to unusual activity",
@@ -43,126 +185,206 @@ router.post("/:userDetails/login", async (req, res) => {
             ),
           },
           reason:
-            "We've detected unusual activity on your account that violates our terms of service. This includes multiple violations of our community guidelines regarding project submissions and client communications.",
+            "We've detected unusual activity on your account that violates our terms of service.",
         });
       }
+
+      // Verify password
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ message: "Invalid password" });
+      }
+
+      tokenRole = user.role;
     } else {
-      return res.status(404).json({ message: "User not found" });
+      return res.status(404).json({ message: "Invalid login type" });
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid)
-      return res.status(401).json({ message: "Invalid  password" });
-
+    // ================================================================
+    // CREATE TOKEN AND RESPOND
+    // ================================================================
     const tokenDetails = {
-      userId: user._id, // Using UUID for user ID
+      userId: user._id,
       username: user.username,
-      role: userDetails === "Manager" ? "admin" : user.role,
+      role: tokenRole,
     };
 
     const token = await createTokenForUser(tokenDetails);
+
     res.cookie("token", token, {
       sameSite: "None",
       httpOnly: true,
-      secure: true, // Must be true when using SameSite=None
+      secure: true,
       path: "/",
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
     });
 
     res.json({
       message: "Login successful",
       username: user.username,
       email: user.email,
-      role: tokenDetails.role,
+      role: tokenRole,
       chat_id: user._id,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Login Error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
 
-// const cosineSimilarity = (vecA, vecB) => {
-//   if (
-//     !Array.isArray(vecA) ||
-//     !Array.isArray(vecB) ||
-//     vecA.length === 0 ||
-//     vecB.length === 0
-//   ) {
-//     throw new Error(
-//       "Invalid input: One or both vectors are undefined, empty, or not arrays"
-//     );
-//   }
-//   if (vecA.length !== vecB.length) {
-//     throw new Error("Vector lengths do not match");
-//   }
+// ============================================================================
+// ADMIN-ONLY ROUTES
+// ============================================================================
 
-//   const dotProduct = vecA.reduce((sum, val, i) => sum + val * vecB[i], 0);
-//   const magnitudeA = Math.sqrt(vecA.reduce((sum, val) => sum + val * val, 0));
-//   const magnitudeB = Math.sqrt(vecB.reduce((sum, val) => sum + val * val, 0));
+/**
+ * POST /admin/change-password
+ * Force password change for admin
+ */
+router.post(
+  "/admin/change-password",
+  verifyToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    const { currentPassword, newPassword, totp_code } = req.body;
 
-//   return magnitudeA && magnitudeB ? dotProduct / (magnitudeA * magnitudeB) : 0;
-// };
+    try {
+      if (!currentPassword || !newPassword || !totp_code) {
+        return res.status(400).json({
+          message: "Current password, new password, and 2FA code are required",
+        });
+      }
 
-// router.post("/verify", verifyToken, authorize(["admin"]), async (req, res) => {
-//   const { faceEmbeddings } = req.body;
-//   const admin = await Admin.findOne({ _id: req.user.userId });
+      const admin = await Admin.findById(req.user.userId);
+      if (!admin) {
+        return res.status(404).json({ message: "Admin not found" });
+      }
 
-//   if (!admin) return res.status(404).json({ error: "Admin not found" });
+      // Verify current password
+      const isPasswordValid = await admin.comparePassword(currentPassword);
+      if (!isPasswordValid) {
+        return res.status(401).json({ message: "Invalid current password" });
+      }
 
-//   // Compare embeddings (Euclidean distance or cosine similarity)
-//   const similarity = cosineSimilarity(faceEmbeddings, admin.faceEmbedding);
+      // Verify 2FA
+      if (admin.twoFactorEnabled) {
+        const isTotpValid = speakeasy.totp.verify({
+          secret: admin.twoFactorSecret,
+          encoding: "base32",
+          token: totp_code.toString().trim(),
+          window: 2,
+        });
 
-//   console.log(similarity);
+        if (!isTotpValid) {
+          return res.status(401).json({ message: "Invalid 2FA code" });
+        }
+      }
 
-//   if (similarity > 0.85) {
-//     res.json({ success: true });
-//   } else {
-//     res.status(401).json({ error: "Face does not match" });
-//   }
-// });
+      // Validate new password strength
+      const hasUppercase = /[A-Z]/.test(newPassword);
+      const hasLowercase = /[a-z]/.test(newPassword);
+      const hasNumber = /[0-9]/.test(newPassword);
+      const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(newPassword);
 
-// router.post(
-//   "/store-face",
-//   verifyToken,
-//   authorize(["admin"]),
-//   async (req, res) => {
-//     const { faceEmbeddings } = req.body;
+      if (
+        newPassword.length < 12 ||
+        !hasUppercase ||
+        !hasLowercase ||
+        !hasNumber ||
+        !hasSpecial
+      ) {
+        return res.status(400).json({
+          message:
+            "Password must be 12+ characters with uppercase, lowercase, number, and special character",
+        });
+      }
 
-//     const existingAdmin = await Admin.findOne({ _id: req.user.userId });
-//     if (!existingAdmin)
-//       return res.status(400).json({ error: "User admin found" });
+      // Update password
+      admin.password = newPassword;
+      admin.mustChangePassword = false;
+      await admin.save();
 
-//     const similarity = cosineSimilarity(
-//       faceEmbeddings,
-//       existingAdmin.faceEmbedding
-//     );
+      // Clear token to force re-login
+      res.clearCookie("token", {
+        sameSite: "None",
+        secure: true,
+        path: "/",
+      });
 
-//     console.log(similarity);
+      res.json({
+        message: "Password changed successfully. Please log in again.",
+      });
+    } catch (error) {
+      console.error("Change Password Error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
 
-//     existingAdmin.faceEmbedding = faceEmbeddings;
-//     await existingAdmin.save();
+/**
+ * POST /admin/disable-2fa
+ * Disable 2FA (requires secret code and current TOTP)
+ */
+router.post(
+  "/admin/disable-2fa",
+  verifyToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    const { secretCode, totp_code } = req.body;
 
-//     res.json({ success: true, message: "Face stored successfully" });
-//   }
-// );
+    try {
+      if (!secretCode || !totp_code) {
+        return res.status(400).json({
+          message: "Secret code and 2FA code are required",
+        });
+      }
 
-// router.put(
-//   "/update-face",
-//   verifyToken,
-//   authorize(["admin"]),
-//   async (req, res) => {
-//     const { faceEmbeddings } = req.body;
+      const admin = await Admin.findById(req.user.userId);
+      if (!admin) {
+        return res.status(404).json({ message: "Admin not found" });
+      }
 
-//     const admin = await Admin.findOne({ _id: req.user.userId });
-//     if (!admin) return res.status(404).json({ error: "Admin not found" });
+      // Verify secret code
+      const isSecretValid = await admin.verifySecretCode(secretCode);
+      if (!isSecretValid) {
+        return res.status(401).json({ message: "Invalid secret code" });
+      }
 
-//     admin.faceEmbedding = faceEmbeddings;
-//     await admin.save();
+      // Verify current TOTP
+      const isTotpValid = speakeasy.totp.verify({
+        secret: admin.twoFactorSecret,
+        encoding: "base32",
+        token: totp_code.toString().trim(),
+        window: 2,
+      });
 
-//     res.json({ success: true, message: "Face updated successfully" });
-//   }
-// );
+      if (!isTotpValid) {
+        return res.status(401).json({ message: "Invalid 2FA code" });
+      }
 
+      // Disable 2FA
+      admin.twoFactorEnabled = false;
+      admin.twoFactorSecret = null;
+      admin.twoFactorBackupCodes = [];
+      await admin.save();
+
+      res.json({
+        message: "2FA disabled. Your account is now less secure.",
+      });
+    } catch (error) {
+      console.error("Disable 2FA Error:", error);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+);
+
+// ============================================================================
+// LOGOUT AND VERIFICATION ROUTES
+// ============================================================================
+
+/**
+ * GET /logout
+ * Logout user by clearing token
+ */
 router.get("/logout", verifyToken, async (req, res) => {
   res.clearCookie("token", {
     sameSite: "None",
@@ -172,15 +394,17 @@ router.get("/logout", verifyToken, async (req, res) => {
   res.json({ message: "Logout successful" });
 });
 
-    
+/**
+ * POST /verify-chatting-id
+ * Verify chat ID for authenticated user
+ */
 router.post("/verify-chatting-id", verifyToken, async (req, res) => {
-try {
-  res.json({ chat_id: req.user.userId });
-} catch (error) {
-  console.error(error);
-  res.status(500).json({ message: "Internal server error" });
-}
+  try {
+    res.json({ chat_id: req.user.userId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal server error" });
+  }
 });
-    
 
 module.exports = router;

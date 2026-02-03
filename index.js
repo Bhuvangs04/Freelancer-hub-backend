@@ -1,49 +1,81 @@
+// ============================================================================
+// FreelancerHub Backend - Main Entry Point
+// Refactored for modularity and maintainability
+// ============================================================================
+
 const express = require("express");
-const app = express();
 const http = require("http");
-const server = http.createServer(app); 
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
-const { mongoose } = require("./config/database");
 const helmet = require("helmet");
+const { mongoose } = require("./config/database");
+const WebSocketService = require("./services/websocket");
+const { notFoundHandler, errorHandler } = require("./middleware/ErrorHandler");
+const { latencyMonitor } = require("./middleware/LatencyMonitor");
+
+// ============================================================================
+// APP INITIALIZATION
+// ============================================================================
+
+const app = express();
+const server = http.createServer(app);
+const PORT = process.env.PORT || 5000;
+
+// ============================================================================
+// ROUTE IMPORTS
+// ============================================================================
+
 const loginRoute = require("./routes/Login");
 const signupRoute = require("./routes/Sign-up");
 const uploadRoute = require("./routes/bucketSending");
 const freelancer = require("./routes/freelancer");
 const chats = require("./routes/chat");
 const workSubmission = require("./routes/WorkSubmission");
-// const auditLogs = require("./middleware/AuditLogs");  no need for this
 const client = require("./routes/client");
 const payment = require("./routes/payment");
 const admin = require("./routes/admin");
 const security = require("./routes/Security");
- const User = require("./models/User");
- const crypto = require("crypto");
-const PORT = process.env.PORT || 3000;
+const agreement = require("./routes/agreement");
+const milestone = require("./routes/milestone");
+const review = require("./routes/review");
+const dispute = require("./routes/dispute");
+const skills = require("./routes/skills");
+const finance = require("./routes/finance");
+const metrics = require("./routes/metrics");
+
+// ============================================================================
+// SECURITY MIDDLEWARE
+// ============================================================================
+
 app.set("trust proxy", true);
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ limit: "50mb", extended: true }));
-app.use(cookieParser());
-const allowedOrigins = [
-  "http://localhost:8080",
-  "http://localhost:8081",
-  "http://localhost:4000",
-  "https://freelancerhub-five.vercel.app",
-  "https://freelancerhub-loadbalancer.vercel.app",
-  "https://freelancer-admin.vercel.app",
-];
+app.disable("x-powered-by");
 
-app.disable("x-powered-by"); // Removes "X-Powered-By" header
-
+// Remove sensitive headers
 app.use((req, res, next) => {
   res.removeHeader("X-Powered-By");
   res.removeHeader("Server");
   next();
 });
 
+app.use(helmet());
+
+// ============================================================================
+// CORS CONFIGURATION
+// ============================================================================
+
+const allowedOrigins = [
+  "http://localhost:8080",
+  "http://localhost:8081",
+  "http://localhost:4000",
+  "http://localhost:5173",
+  "https://freelancerhub-five.vercel.app",
+  "https://freelancerhub-loadbalancer.vercel.app",
+  "https://freelancer-admin.vercel.app",
+];
+
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (e.g., mobile apps or Postman)
+    // Allow requests with no origin (mobile apps, Postman)
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -53,171 +85,128 @@ const corsOptions = {
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   credentials: true,
 };
-// Use CORS middleware
+
 app.use(cors(corsOptions));
-
-// Explicitly handle preflight requests
 app.options("*", cors(corsOptions));
-app.use(helmet());
 
-app.use((req, res, next) => {
-  console.log(`[REQUEST]: ${req.method} ${req.url}`);
-  next();
-});
+// ============================================================================
+// BODY PARSING
+// ============================================================================
+
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
+app.use(cookieParser());
+
+// ============================================================================
+// LATENCY MONITORING
+// ============================================================================
+
+app.use(latencyMonitor);
+
+// ============================================================================
+// DATABASE CONNECTION EVENTS
+// ============================================================================
 
 mongoose.connection.on("error", (err) => {
-  console.error("Error connecting to MongoDB:", err);
+  console.error("MongoDB connection error:", err);
 });
+
+mongoose.connection.on("disconnected", () => {
+  console.warn("MongoDB disconnected. Attempting to reconnect...");
+});
+
+mongoose.connection.on("reconnected", () => {
+  console.log("MongoDB reconnected");
+});
+
+// ============================================================================
+// HEALTH CHECK
+// ============================================================================
 
 app.get("/health", (req, res) => {
-  res.status(200).send("OK");
+  res.status(200).json({
+    status: "OK",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  });
 });
-const WebSocket = require("ws");
 
+// ============================================================================
+// API ROUTES
+// ============================================================================
 
-const wss = new WebSocket.Server({ server });
- 
-
- const secretKey = Buffer.from(process.env.ENCRYPTION_KEY, "hex");
- const activeUsers = new Map();
- 
- const encryptMessage = (message, key) => {
-   const iv = crypto.randomBytes(12);
-   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-   const encrypted = Buffer.concat([
-     cipher.update(message, "utf8"),
-     cipher.final(),
-   ]);
-   const authTag = cipher.getAuthTag();
-   return `${iv.toString("hex")}:${encrypted.toString("hex")}:${authTag.toString(
-     "hex"
-   )}`;
- };
- 
-  
- const decryptMessage = (encryptedMessage, key) => {
-   try {
-     const [ivHex, encryptedText, authTagHex] = encryptedMessage.split(":");
-     if (!ivHex || !encryptedText || !authTagHex) {
-       throw new Error("Invalid encrypted message format");
-     }
-     const iv = Buffer.from(ivHex, "hex");
-     const encrypted = Buffer.from(encryptedText, "hex");
-     const authTag = Buffer.from(authTagHex, "hex");
-     const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-     decipher.setAuthTag(authTag);
-     return Buffer.concat([
-       decipher.update(encrypted),
-       decipher.final(),
-     ]).toString("utf8");
-   } catch (error) {
-     console.error("Decryption failed:", error.message);
-     return "Decryption error";
-   }
- };
- 
- wss.on("connection", (ws, req) => {
-   const userId = req.url?.split("/").pop();
-   if (!userId) {
-     ws.close();
-     return;
-   }
- 
-   activeUsers.set(userId, ws);
-   console.log(`[WEBSOCKET] Client connected: ${userId}`);
- 
-   ws.on("message", async (data) => {
-     try {
-       const messageString = data.toString();
-       const parsedData = JSON.parse(messageString);
-       const { sender, receiver, message, alreadyStored, type } = parsedData;
- 
-       if (type === "typing") {
-         const recipientSocket = activeUsers.get(receiver);
-         if (recipientSocket) {
-           recipientSocket.send(JSON.stringify({ sender, type: "typing" }));
-         }
-         return;
-       }
- 
-       const webRTCTypes = [
-         "connection-request",
-         "connection-accepted",
-         "connection-rejected",
-         "candidate",
-         "answer",
-         "offer",
-       ];
-       if (webRTCTypes.includes(type)) {
-         console.log(`[WEBSOCKET] Received ${type} message:`, parsedData);
-         const recipientSocket = activeUsers.get(receiver);
-         if (recipientSocket) {
-           recipientSocket.send(JSON.stringify(parsedData));
-           console.log(`[WEBSOCKET] ${type} message sent to ${receiver}`);
-         } else {
-           console.error(
-             `[WEBSOCKET] No active WebSocket for receiver: ${receiver}`
-           );
-         }
-         return;
-       }
- 
-       const encryptedMessage = encryptMessage(message, secretKey);
-       let chat;
- 
-       if (!alreadyStored) {
-         chat = new Chat({
-           sender,
-           receiver,
-           message: encryptedMessage,
-           encrypted: true,
-           status: "sent",
-         });
-         await chat.save();
-       }
- 
-       const recipientSocket = activeUsers.get(receiver);
-       if (recipientSocket) {
-         recipientSocket.send(
-           JSON.stringify({
-             sender,
-             receiver,
-             message: encryptedMessage,
-             status: "delivered",
-           })
-         );
-         if (chat) {
-           chat.status = "delivered";
-           await chat.save();
-         }
-       }
-     } catch (error) {
-       console.error("[WEBSOCKET] Error processing message:", error);
-     }
-   });
- 
-   ws.on("close", () => {
-     activeUsers.delete(userId);
-     console.log(`[WEBSOCKET] Client disconnected: ${userId}`);
-   });
- 
-   ws.on("error", (error) => {
-     console.error(`[WEBSOCKET] Error for ${userId}:`, error);
-     activeUsers.delete(userId);
-   });
- });
-
-app.use("/api/vi/client", client);
+// Authentication
 app.use("/api/vi", loginRoute);
 app.use("/api/vi", signupRoute);
+
+// File Upload
 app.use("/api/vi", uploadRoute);
-app.use("/admin", admin);
+
+// User Management
+app.use("/api/vi/client", client);
 app.use("/api/vi/freelancer", freelancer);
+
+// Core Features
 app.use("/api/vi/chat", chats);
 app.use("/api/vi/payments", payment);
 app.use("/api/vi/worksubmission", workSubmission);
 app.use("/api/vi/security", security);
 
+// Contract & Trust Features
+app.use("/api/vi/agreement", agreement);
+app.use("/api/vi/milestone", milestone);
+app.use("/api/vi/review", review);
+app.use("/api/vi/dispute", dispute);
+
+// Skill & Finance Features
+app.use("/api/vi/skills", skills);
+app.use("/api/vi/finance", finance);
+
+// Admin Panel
+app.use("/admin", admin);
+app.use("/admin/metrics", metrics);
+
+// ============================================================================
+// ERROR HANDLING
+// ============================================================================
+
+// 404 handler for undefined routes
+app.use(notFoundHandler);
+
+// Global error handler
+app.use(errorHandler);
+
+// ============================================================================
+// WEBSOCKET INITIALIZATION
+// ============================================================================
+
+const wsService = new WebSocketService(server);
+
+// ============================================================================
+// SERVER START
+// ============================================================================
+
 server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log("=".repeat(60));
+  console.log(`FreelancerHub Server started`);
+  console.log(`Port: ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`Time: ${new Date().toISOString()}`);
+  console.log("=".repeat(60));
 });
+
+// ============================================================================
+// GRACEFUL SHUTDOWN
+// ============================================================================
+
+process.on("SIGTERM", () => {
+  console.log("SIGTERM received. Shutting down gracefully...");
+  server.close(() => {
+    mongoose.connection.close(false, () => {
+      console.log("Server closed. Database connection closed.");
+      process.exit(0);
+    });
+  });
+});
+
+module.exports = { app, server, wsService };

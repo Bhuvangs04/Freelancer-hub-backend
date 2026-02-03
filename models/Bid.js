@@ -17,8 +17,13 @@ const BidSchema = new mongoose.Schema(
     message: { type: String },
     status: {
       type: String,
-      enum: ["pending", "accepted", "rejected"],
+      enum: ["pending", "sign_pending", "accepted", "rejected", "agreement_cancelled", "withdrawn"],
       default: "pending",
+    },
+    // Reason for cancellation (used when status is agreement_cancelled)
+    cancellationReason: {
+      type: String,
+      default: null,
     },
   },
   { timestamps: true }

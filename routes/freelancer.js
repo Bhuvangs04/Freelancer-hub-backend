@@ -891,23 +891,5 @@ router.post(
   }
 );
 
-// router.get(
-//   "/freelancer/oldworks/:id",
-//   verifyToken,
-//   authorize(["freelancer", "client"]),
-//   async (req, res) => {
-//     try {
-//       const { id } = req.params;
-//       const oldProjects = await OldProjectsSchema.find({ freelancerId: id });
-//       if (oldProjects.length === 0) {
-//         return res.status(404).json({ message: "No old works found" });
-//       }
-//       res.json({ oldProjects });
-//     } catch (error) {
-//       console.log(error);
-//       res.status(500).send({ message: "Error fetching old works" });
-//     }
-//   }
-// );
 
 module.exports = router;

@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.735.0",
+    "@aws-sdk/client-s3": "^3.975.0",
     "@aws-sdk/s3-request-presigner": "^3.735.0",
     "aws-sdk": "^2.1692.0",
     "axios": "^1.7.9",
@@ -25,8 +25,10 @@
     "mysql2": "^3.12.0",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.10.0",
+    "qrcode": "^1.5.4",
     "razorpay": "^2.9.6",
     "request-ip": "^3.3.0",
+    "speakeasy": "^2.0.0",
     "uuid": "^11.0.5",
     "ws": "^8.18.0"
   },
@@ -35,6 +37,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "dev": "nodemon index.js",
     "lint": "eslint ."
   },
   "keywords": [],
@@ -47,6 +50,7 @@
     "eslint-config-prettier": "^10.1.5",
     "eslint-plugin-n": "^17.18.0",
     "eslint-plugin-node": "^11.1.0",
-    "eslint-plugin-security": "^3.0.1"
+    "eslint-plugin-security": "^3.0.1",
+    "nodemon": "^3.1.11"
   }
 }
