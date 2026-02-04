@@ -107,7 +107,9 @@ router.post("/send-otp", async (req, res) => {
       { upsert: true, new: true }
     );
 
-    await sendEmail(
+    res.status(200).json({ message: "OTP sent successfully." });
+
+    sendEmail(
       normalizedEmail,
       "Verification Code - FreelancerHub",
       `<div style="font-family: Arial, sans-serif; max-width: 500px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px; text-align: center; background-color: #f9f9f9;">
@@ -119,12 +121,14 @@ router.post("/send-otp", async (req, res) => {
         <p style="font-size: 12px; color: #888;">If you did not request this, please ignore this email.</p>
         <footer style="margin-top: 20px; font-size: 12px; color: #999;">&copy; 2025 FreelancerHub. All Rights Reserved.</footer>
       </div>`
-    );
-
-    res.status(200).json({ message: "OTP sent successfully." });
+    ).catch(err => {
+      console.error("Async OTP email failed:", err);
+    });
   } catch (error) {
     console.error("Send OTP Error:", error);
-    res.status(500).json({ message: "Error sending OTP." });
+    if (!res.headersSent) {
+      res.status(500).json({ message: "Error sending OTP." });
+    }
   }
 });
 
