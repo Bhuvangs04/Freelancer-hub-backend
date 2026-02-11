@@ -325,6 +325,7 @@ router.post(
         .pop()}`;
       const url = await uploadFile(file, process.env.AWS_BUCKET_NAME, filename);
       client.profilePictureUrl = url;
+      client.profileComplete = true;
       await client.save();
       await logActivity(req.user.userId, "Updated profile picture");
       res.status(200).json({ url });

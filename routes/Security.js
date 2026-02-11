@@ -1,5 +1,6 @@
 const express = require("express");
 const { verifyToken, authorize } = require("../middleware/Auth");
+const User = require("../models/User");
 
 const security = express.Router();
 
@@ -17,7 +18,6 @@ security.post(
   }
 );
 
-
 security.post(
   "/checkAuth/permission/freelancer",
   verifyToken,
@@ -32,7 +32,40 @@ security.post(
   }
 );
 
+/**
+ * GET /checkAuth/profile-status
+ * Check if user has completed their profile setup
+ */
+security.get(
+  "/checkAuth/profile-status",
+  verifyToken,
+  authorize(["client", "freelancer"]),
+  async (req, res) => {
+    try {
+      const user = await User.findById(req.user.userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Check if profile is complete based on role
+      const isComplete = user.profileComplete || user.checkProfileComplete();
+
+      // If profile is newly complete, update the flag
+      if (!user.profileComplete && isComplete) {
+        user.profileComplete = true;
+        await user.save();
+      }
+
+      res.json({
+        profileComplete: user.profileComplete,
+        role: user.role,
+        profilePicture: user.profilePictureUrl || null,
+      });
+    } catch (error) {
+      console.error("Profile status check error:", error);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
 
 module.exports = security;
-
-

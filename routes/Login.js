@@ -225,6 +225,8 @@ router.post("/:userDetails/login", async (req, res) => {
       email: user.email,
       role: tokenRole,
       chat_id: user._id,
+      profileComplete: user.profileComplete || false,
+      profilePicture: user.profilePictureUrl || null,
     });
   } catch (error) {
     console.error("Login Error:", error);

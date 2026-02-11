@@ -616,6 +616,8 @@ router.post(
         }
       }
 
+      profile.profileComplete = true;
+
       await profile.save(); // Save only if changes were made
       await logActivity(req.user.userId, `Profile updated successfully`);
       res

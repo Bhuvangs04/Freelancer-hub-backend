@@ -10,6 +10,7 @@ const UserSchema = new mongoose.Schema(
     resumeUrl: { type: String },
     bio: { type: String },
     role: { type: String, enum: ["freelancer", "client"], required: true },
+    profileComplete: { type: Boolean, default: false },
     isBanned: { type: Boolean, default: false },
     isbanDate: { type: Date },
     otpVerified: { type: Boolean, default: false },
@@ -29,9 +30,23 @@ const UserSchema = new mongoose.Schema(
       ],
       default: [],
     },
+    skills: {
+      type: [
+        {
+          name: { type: String, required: true },
+          proficiency: {
+            type: String,
+            enum: ["beginner", "intermediate", "expert"],
+            default: "beginner",
+          },
+        },
+      ],
+      default: [],
+    },
     banExpiresAt: { type: Date },
     Strikes: { type: Number, default: 0 },
     portflio: { type: String, default: "" },
+    githubUsername: { type: String },
     status: {
       type: String,
       enum: ["Available", "active", "Busy", "Away"],
@@ -50,5 +65,23 @@ UserSchema.pre("save", async function (next) {
   this.password = await bcrypt.hash(this.password, 13);
   next();
 });
+
+// Method to check if profile is complete based on role
+UserSchema.methods.checkProfileComplete = function () {
+  if (this.role === "freelancer") {
+    // Freelancer needs: profile picture, resume, bio, at least 1 skill
+    return !!(
+      this.profilePictureUrl &&
+      this.resumeUrl &&
+      this.bio &&
+      this.skills &&
+      this.skills.length > 0
+    );
+  } else if (this.role === "client") {
+    // Client needs: profile picture, company name, industry
+    return !!(this.profilePictureUrl && this.companyName && this.Industry);
+  }
+  return false;
+};
 
 module.exports = mongoose.model("User", UserSchema);

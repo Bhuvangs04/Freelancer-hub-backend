@@ -20,6 +20,7 @@ async function sendEmail(to, subject, html) {
       htmlContent: html,
     });
   } catch (error) {
+    console.log(error)
     console.error(
       "Brevo email error:",
       error?.response?.text || error.message || error
