@@ -659,6 +659,7 @@ router.post(
           escrow.amount = agreementAmount;
           escrow.adjustedAmount = agreementAmount;
           escrow.agreementId = agreement._id;
+          escrow.freelancerId = agreement.freelancerId._id;
           
           if (refundAmount > 0) {
             // Excess funds - process partial refund to client
