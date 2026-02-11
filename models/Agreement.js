@@ -495,10 +495,11 @@ AgreementSchema.methods.verifyIntegrity = function () {
     agreedAmount: this.agreedAmount,
     deadline: this.deadline.toISOString(),
     deliverables: this.deliverables,
+    version: this.version,
+    projectTitle: this.projectTitle,
     terms: this.terms,
     projectDescription: this.projectDescription,
-    projectTitle: this.projectTitle,
-    version: this.version,
+
   });
   const calculatedHash = crypto.createHash("sha256").update(contentToHash).digest("hex");
   return calculatedHash === this.contentHash;

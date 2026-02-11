@@ -751,6 +751,7 @@ router.post(
         });
       }
 
+
       if (!agreement.verifyIntegrity()) {
         await session.abortTransaction();
         return res.status(400).json({
@@ -765,7 +766,7 @@ router.post(
           projectId: project_id,
           clientId: clientId,
           freelancerId: freelancer_id,
-          status: "funded",
+          status: { $in: ["funded", "partial_refund"] }
         },
         {
           status: "released", // Lock it immediately
@@ -816,13 +817,10 @@ router.post(
         return res.status(404).json({ message: "Project not found or not in progress" });
       }
 
-
-
-
       const freelancerAmount = agreement.agreedAmount;
       const remainingAmount = escrow.amount - freelancerAmount;
 
-      if (escrow.amount < agreement.totalAmount) {
+      if (escrow.amount < agreement.agreedAmount) {
         await session.abortTransaction();
         return res.status(400).json({
           message: "Escrow amount does not match agreement",
