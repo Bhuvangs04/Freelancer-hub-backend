@@ -10,6 +10,7 @@ const Escrow = require("../models/Escrow");
 const Transaction = require("../models/Transaction");
 const Project = require("../models/Project");
 const IdempotencyKey = require("../models/IdempotencyKey");
+const Agreement = require("../models/Agreement")
 const axios = require("axios");
 const sendEmail = require("../utils/sendEmail");
 const crypto = require("crypto");
@@ -726,7 +727,37 @@ router.post(
         return res.status(400).json({ message: "Valid freelancer_id is required" });
       }
 
-      session.startTransaction();
+      await session.startTransaction();
+
+
+      const agreement = await Agreement.findOne({
+        projectId: project_id,
+        clientId: clientId,
+        freelancerId: freelancer_id,
+        status: "active",
+      }).session(session);
+
+      if (!agreement) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          message: "No active signed agreement found",
+        });
+      }
+
+      if (!agreement.isFullySigned()) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          message: "Agreement is not fully signed",
+        });
+      }
+
+      if (!agreement.verifyIntegrity()) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          message: "Agreement integrity check failed",
+        });
+      }
+
 
       // Find and lock escrow atomically
       const escrow = await Escrow.findOneAndUpdate(
@@ -785,8 +816,19 @@ router.post(
         return res.status(404).json({ message: "Project not found or not in progress" });
       }
 
-      const freelancerAmount = ongoingProject.freelancerBidPrice;
+
+
+
+      const freelancerAmount = agreement.agreedAmount;
       const remainingAmount = escrow.amount - freelancerAmount;
+
+      if (escrow.amount < agreement.totalAmount) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          message: "Escrow amount does not match agreement",
+        });
+      }
+
 
       // Validate sufficient funds
       if (freelancerAmount > escrow.amount) {
@@ -839,6 +881,11 @@ router.post(
       project.status = "completed";
       await project.save({ session });
 
+      agreement.status = "completed";
+      await agreement.save({ session });
+
+
+
       // Create freelancer escrow record
       const freelancerEscrow = new FreelancerEscrowSchema({
         projectId: project_id,
@@ -867,6 +914,7 @@ router.post(
         ],
         { session }
       );
+
 
       await session.commitTransaction();
 
