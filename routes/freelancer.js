@@ -633,7 +633,7 @@ router.post(
 router.post(
   "/freelancer/upload-portfolio/photo",
   verifyToken,
-  authorize(["freelancer"]),
+  authorize(["freelancer", "client"]),
   upload.single("file"),
   async (req, res) => {
     try {
