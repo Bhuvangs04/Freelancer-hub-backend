@@ -167,6 +167,30 @@ app.use("/admin", admin);
 app.use("/admin/metrics", metrics);
 
 // ============================================================================
+// PUBLIC SETTINGS (no auth — used by frontend for commission, maintenance, etc.)
+// ============================================================================
+const SiteSettings = require("./models/SiteSettings");
+
+app.get("/api/vi/settings/public", async (_req, res) => {
+  try {
+    const settings = await SiteSettings.getSettings();
+    res.json({
+      platformCommissionPercent: settings.platformCommissionPercent,
+      siteName: settings.siteName,
+      logoUrl: settings.logoUrl,
+      supportEmail: settings.supportEmail,
+      maintenanceMode: settings.maintenanceMode,
+      maintenanceMessage: settings.maintenanceMessage,
+      minimumProjectBudget: settings.minimumProjectBudget,
+      maximumProjectBudget: settings.maximumProjectBudget,
+    });
+  } catch (err) {
+    console.error("Public settings error:", err);
+    res.status(500).json({ message: "Error fetching settings" });
+  }
+});
+
+// ============================================================================
 // ERROR HANDLING
 // ============================================================================
 

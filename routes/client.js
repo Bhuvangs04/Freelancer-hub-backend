@@ -480,7 +480,7 @@ router.get(
       // Calculate total balances
       const total_balance = fundedEscrows.reduce((sum, e) => sum + e.amount, 0);
       const refunded_balance = refundedEscrows.reduce(
-        (sum, e) => sum + e.amount,
+        (sum, e) => sum + (e.refundedAmount || 0),
         0
       );
 
@@ -499,9 +499,10 @@ router.get(
       transactions.forEach((transaction) => {
         if (transaction.type === "deposit") {
           total_deposited += transaction.amount;
-        } else if (["withdrawal", "refund"].includes(transaction.type)) {
+        } else if (["withdrawal"].includes(transaction.type)) {
           total_withdrawn += transaction.amount;
-        }
+        } 
+        // Note: 'refund' and 'dispute_refund' are money returned to client, not withdrawals
 
         transaction_history.push({
           projectId: transaction.escrowId?.projectId?._id,

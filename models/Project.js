@@ -7,7 +7,7 @@ const ProjectSchema = new mongoose.Schema(
     budget: { type: Number, required: true, default: 0.0 },
     status: {
       type: String,
-      enum: ["open", "in_progress", "completed", "cancelled", "rejected"],
+      enum: ["open", "in_progress", "completed", "cancelled", "rejected", "disputed"],
       default: "open",
     },
     deadline: { type: Date, required: true },

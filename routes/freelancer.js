@@ -83,6 +83,7 @@ router.get(
         })
       );
 
+
       const adminTransactions = await Promise.all(
         adminEscrows.map(async (adminEscrow) => {
           const transactions = await Transaction.find({
@@ -91,6 +92,7 @@ router.get(
           return { escrowId: adminEscrow._id, transactions };
         })
       );
+
 
       const mergedTransactions = [...escrowTransactions, ...adminTransactions];
 

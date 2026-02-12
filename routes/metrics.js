@@ -48,6 +48,11 @@ router.get(
       const byEndpoint = await RequestMetric.getLatencyByEndpoint(period, 15);
       const slowest = await RequestMetric.getSlowestRequests(10);
 
+      const statusCodes = await RequestMetric.getStatsByStatusCode(period);
+      const users = await RequestMetric.getStatsByUserRole(period);
+      const platforms = await RequestMetric.getStatsByPlatform(period);
+      const timeSeries = await RequestMetric.getTimeSeriesStats(period);
+
       res.json({
         success: true,
         period,
@@ -61,6 +66,24 @@ router.get(
             ? Math.round((stats.slowRequests / stats.totalRequests) * 10000) / 100
             : 0,
         },
+        advanced: {
+          statusCodes: statusCodes.map(s => ({ code: s._id, count: s.count })),
+          userRoles: users.map(r => ({ role: r._id, count: r.count, avgLatency: Math.round(r.avgLatency) })),
+          platforms: platforms.map(p => ({ ua: p._id, count: p.count })),
+        },
+        timeSeries: timeSeries.map(t => ({
+          time: t._id,
+          requests: t.count,
+          latency: Math.round(t.avgLatency),
+          errors: t.errorCount
+        })),
+        topEndpoints: byEndpoint.map((e) => ({
+          method: e._id.method,
+          route: e._id.path,
+          count: e.count,
+          avgLatency: Math.round(e.avgLatency * 100) / 100,
+          maxLatency: e.maxLatency,
+        })),
         topEndpoints: byEndpoint.map((e) => ({
           method: e._id.method,
           route: e._id.path,

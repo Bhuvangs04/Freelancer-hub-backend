@@ -7,8 +7,10 @@ const Dispute = require("../models/Dispute");
 const Agreement = require("../models/Agreement");
 const Milestone = require("../models/Milestone");
 const Project = require("../models/Project");
+const Escrow = require("../models/Escrow");
 const FreelancerEscrow = require("../models/FreelancerEscrow");
 const Transaction = require("../models/Transaction");
+const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
 const Activity = require("../models/ActionSchema");
 
@@ -189,7 +191,7 @@ router.post(
         notify: {
           email: true,
         },
-        callback_url: `https://freelancerhub-five.vercel.app/disputes/${dispute._id}/payment-success`,
+        callback_url: `${process.env.FRONTEND_URL || "https://freelancerhub-five.vercel.app"}/disputes/${dispute._id}/payment-success`,
         callback_method: "get",
         notes: {
           dispute_id: dispute._id.toString(),
@@ -426,6 +428,66 @@ router.post(
 );
 
 /**
+ * POST /dispute/:id/message
+ * Add a chat message to the dispute thread (both parties + admin)
+ */
+router.post(
+  "/:id/message",
+  verifyToken,
+  authorize(["client", "freelancer", "admin"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.userId;
+      const userRole = req.user.role;
+      const { id } = req.params;
+      const { message } = req.body;
+
+      if (!isValidObjectId(id)) {
+        return res.status(400).json({ message: "Invalid dispute ID" });
+      }
+
+      if (!message || message.trim().length === 0) {
+        return res.status(400).json({ message: "Message is required" });
+      }
+
+      const dispute = await Dispute.findById(id);
+      if (!dispute) {
+        return res.status(404).json({ message: "Dispute not found" });
+      }
+
+      // Verify access
+      const isFiler = dispute.filedBy.toString() === userId;
+      const isRespondent = dispute.filedAgainst.toString() === userId;
+      const isAdmin = userRole === "admin";
+
+      if (!isFiler && !isRespondent && !isAdmin) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      if (["resolved", "withdrawn"].includes(dispute.status)) {
+        return res.status(400).json({ message: "Cannot message on a closed dispute" });
+      }
+
+      dispute.chatLogs.push({
+        message: message.trim(),
+        sender: userId,
+        senderRole: isAdmin ? "admin" : (isFiler ? dispute.filerRole : (dispute.filerRole === "client" ? "freelancer" : "client")),
+        timestamp: new Date(),
+      });
+      await dispute.save();
+
+      res.json({
+        message: "Message sent",
+        chatLogs: dispute.chatLogs,
+      });
+    } catch (err) {
+      console.error("Send Message Error:", err);
+      res.status(500).json({ message: "Error sending message" });
+    }
+  }
+);
+
+/**
  * GET /dispute/my
  * Get user's disputes
  */
@@ -478,11 +540,13 @@ router.get(
       }
 
       const dispute = await Dispute.findById(id)
-        .populate("projectId", "title budget description")
+        .populate("projectId", "title budget description status")
         .populate("agreementId", "agreementNumber agreedAmount")
         .populate("milestoneId", "title amount status")
         .populate("clientId", "username email")
         .populate("freelancerId", "username email")
+        .populate("filedBy", "username email")
+        .populate("filedAgainst", "username email")
         .populate("assignedAdmin", "username");
 
       if (!dispute) {
@@ -490,15 +554,33 @@ router.get(
       }
 
       // Verify access
-      const isFiler = dispute.filedBy.toString() === userId;
-      const isRespondent = dispute.filedAgainst.toString() === userId;
+      const filerId = dispute.filedBy?._id?.toString() || dispute.filedBy?.toString();
+      const respondentId = dispute.filedAgainst?._id?.toString() || dispute.filedAgainst?.toString();
+      const isFiler = filerId === userId;
+      const isRespondent = respondentId === userId;
       const isAdmin = req.user.role === "admin";
 
       if (!isFiler && !isRespondent && !isAdmin) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
-      res.json({ dispute });
+      // Fetch latest agreement & escrow for this project (admin reference)
+      let agreementRef = null;
+      let escrowRef = null;
+
+      if (dispute.projectId?._id) {
+        const projectId = dispute.projectId._id;
+
+        agreementRef = await Agreement.findOne({ projectId, status: "active" })
+          .select("agreementNumber agreedAmount status deliverables deadline projectDescription clientSignature.signed freelancerSignature.signed createdAt")
+          .lean();
+
+        escrowRef = await Escrow.findOne({ projectId })
+          .select("amount originalAmount refundedAmount status adjustmentHistory")
+          .lean();
+      }
+
+      res.json({ dispute, agreementRef, escrowRef });
     } catch (err) {
       console.error("Get Dispute Error:", err);
       res.status(500).json({ message: "Error fetching dispute" });
@@ -577,6 +659,14 @@ router.post(
 /**
  * POST /dispute/admin/:id/resolve
  * Resolve dispute (admin decision)
+ *
+ * Real-world flow:
+ * 1. Auto-calculate amounts from escrow (admin can override for split)
+ * 2. Update escrow status and record adjustment history
+ * 3. Create FreelancerEscrow (for freelancer payouts) and Transaction records
+ * 4. Transition Project status (completed / cancelled / as-is)
+ * 5. Update Agreement status
+ * 6. Send email notifications to both parties
  */
 router.post(
   "/admin/:id/resolve",
@@ -584,12 +674,13 @@ router.post(
   authorize(["admin"]),
   async (req, res) => {
     const session = await mongoose.startSession();
-    
+
     try {
       const adminId = req.user.userId;
       const { id } = req.params;
       const { decision, awardedAmount, refundAmount, reasoning, penaltyApplied } = req.body;
 
+      // ── Input validation ──
       if (!isValidObjectId(id)) {
         return res.status(400).json({ message: "Invalid dispute ID" });
       }
@@ -605,6 +696,7 @@ router.post(
 
       session.startTransaction();
 
+      // ── Load dispute + parties ──
       const dispute = await Dispute.findById(id)
         .populate("clientId", "username email")
         .populate("freelancerId", "username email")
@@ -620,87 +712,300 @@ router.post(
         return res.status(409).json({ message: "Dispute already resolved" });
       }
 
-      // Determine awarded party
+      // ── Load escrow (the money pool) ──
+      const escrow = await Escrow.findOne({ projectId: dispute.projectId }).session(session);
+      const escrowAmount = escrow ? (escrow.originalAmount || escrow.amount) : 0;
+
+      // ── Auto-calculate financial amounts from escrow ──
+      let finalAward = 0;   // amount going to freelancer
+      let finalRefund = 0;  // amount going back to client
+
+      if (decision === "freelancer_favor") {
+        // Full escrow amount goes to freelancer
+        finalAward = escrowAmount;
+        finalRefund = 0;
+      } else if (decision === "client_favor") {
+        // Full escrow amount refunded to client
+        finalAward = 0;
+        finalRefund = escrowAmount;
+      } else if (decision === "split") {
+        // Admin specifies amounts, or default 50/50
+        finalAward = (awardedAmount && awardedAmount > 0) ? awardedAmount : Math.floor(escrowAmount / 2);
+        finalRefund = (refundAmount && refundAmount > 0) ? refundAmount : (escrowAmount - finalAward);
+
+        // Validate split doesn't exceed escrow
+        if (finalAward + finalRefund > escrowAmount) {
+          await session.abortTransaction();
+          return res.status(400).json({
+            message: `Split amounts (₹${finalAward} + ₹${finalRefund} = ₹${finalAward + finalRefund}) exceed escrow (₹${escrowAmount})`,
+          });
+        }
+      }
+      // dismissed → finalAward = 0, finalRefund = 0 (no money movement)
+
+      // ── Determine awarded party ──
       let awardedTo = null;
-      if (decision === "client_favor") {
-        awardedTo = dispute.clientId._id;
-      } else if (decision === "freelancer_favor") {
-        awardedTo = dispute.freelancerId._id;
+      if (decision === "client_favor") awardedTo = dispute.clientId._id;
+      else if (decision === "freelancer_favor") awardedTo = dispute.freelancerId._id;
+
+      // ── Resolve the dispute record (with session) ──
+      dispute.resolution = {
+        decision,
+        awardedTo,
+        awardedAmount: finalAward,
+        refundAmount: finalRefund,
+        penaltyApplied: penaltyApplied || false,
+        reasoning,
+        resolvedBy: adminId,
+        resolvedAt: new Date(),
+      };
+      dispute.status = "resolved";
+      dispute.adminActions.push({
+        action: "resolved",
+        adminId,
+        note: `Decision: ${decision} | Award: ₹${finalAward} | Refund: ₹${finalRefund}`,
+      });
+      await dispute.save({ session });
+
+      // ============================================================
+      // ESCROW SYNC — update the main Escrow status
+      // ============================================================
+      if (escrow && ["funded", "adjusted"].includes(escrow.status)) {
+        if (decision === "freelancer_favor") {
+          escrow.status = "released";
+          escrow.refundedAmount = 0;
+          escrow.adjustmentHistory.push({
+            previousAmount: escrow.amount,
+            newAmount: escrow.amount,
+            refundAmount: 0,
+            reason: `[DISPUTE RESOLVED] ${dispute.disputeNumber} — Full release to freelancer`,
+            adjustedAt: new Date(),
+          });
+          await escrow.save({ session });
+
+        } else if (decision === "client_favor") {
+          escrow.status = "refunded";
+          escrow.refundedAmount = escrowAmount;
+          escrow.adjustmentHistory.push({
+            previousAmount: escrow.amount,
+            newAmount: 0,
+            refundAmount: escrowAmount,
+            reason: `[DISPUTE RESOLVED] ${dispute.disputeNumber} — Full refund to client`,
+            adjustedAt: new Date(),
+          });
+          escrow.amount = 0;
+          await escrow.save({ session });
+
+        } else if (decision === "split") {
+          escrow.status = "partial_refund";
+          escrow.refundedAmount = finalRefund;
+          escrow.adjustmentHistory.push({
+            previousAmount: escrow.amount,
+            newAmount: finalAward,
+            refundAmount: finalRefund,
+            reason: `[DISPUTE RESOLVED] ${dispute.disputeNumber} — Split (₹${finalAward} freelancer / ₹${finalRefund} client)`,
+            adjustedAt: new Date(),
+          });
+          escrow.amount = finalAward;
+          await escrow.save({ session });
+        }
+        // dismissed → escrow stays as-is
       }
 
-      // Resolve dispute
-      await dispute.resolve(
-        {
-          decision,
-          awardedTo,
-          awardedAmount: awardedAmount || 0,
-          refundAmount: refundAmount || 0,
-          penaltyApplied: penaltyApplied || false,
-          reasoning,
-        },
-        adminId
-      );
+      // ============================================================
+      // FINANCIAL RECORDS — FreelancerEscrow + Transactions
+      // ============================================================
 
-      // Process financial resolution if applicable
-      if (awardedAmount && awardedAmount > 0 && awardedTo) {
+      // ── Freelancer payout (freelancer_favor or split) ──
+      if ((decision === "freelancer_favor" || decision === "split") && finalAward > 0) {
+        const freelancerEscrow = new FreelancerEscrow({
+          projectId: dispute.projectId,
+          freelancerId: dispute.freelancerId._id,
+          amount: finalAward,
+          status: "paid",
+        });
+        await freelancerEscrow.save({ session });
+
+        await Transaction.create([{
+          escrowId: freelancerEscrow._id,
+          type: "dispute_award",
+          amount: finalAward,
+          status: "completed",
+          description: `Dispute ${decision === "split" ? "split " : ""}award to freelancer — ${dispute.disputeNumber}`,
+        }], { session });
+      }
+
+      // ── Client refund (client_favor or split) ──
+      if ((decision === "client_favor" || decision === "split") && finalRefund > 0 && escrow) {
+        await Transaction.create([{
+          escrowId: escrow._id,
+          type: "dispute_refund",
+          amount: finalRefund,
+          status: "completed",
+          description: `Dispute ${decision === "split" ? "split " : ""}refund to client — ${dispute.disputeNumber}`,
+          RefundedId: dispute.clientId._id.toString(),
+        }], { session });
+      }
+
+      // ============================================================
+      // PROJECT STATUS TRANSITION
+      // ============================================================
+      const project = await Project.findById(dispute.projectId).session(session);
+      if (project) {
         if (decision === "freelancer_favor") {
-          // Pay freelancer
-          const freelancerEscrow = new FreelancerEscrow({
-            projectId: dispute.projectId,
-            freelancerId: dispute.freelancerId._id,
-            amount: awardedAmount,
-            status: "paid",
-          });
-          await freelancerEscrow.save({ session });
-
-          await Transaction.create([{
-            escrowId: freelancerEscrow._id,
-            type: "dispute_award",
-            amount: awardedAmount,
-            status: "completed",
-            description: `Dispute resolution award - ${dispute.disputeNumber}`,
-          }], { session });
+          // Freelancer did the work → mark project as completed
+          project.status = "completed";
+        } else if (decision === "client_favor") {
+          // Full refund → cancel the project
+          project.status = "cancelled";
+        } else if (decision === "split") {
+          // Compromise reached → mark project as completed
+          project.status = "completed";
         }
-        // Note: Client refund would be processed via Razorpay refund
+        // dismissed → project stays as-is (dispute was invalid)
+        if (decision !== "dismissed") {
+          await project.save({ session });
+        }
+      }
+
+      // ============================================================
+      // AGREEMENT STATUS TRANSITION
+      // ============================================================
+      const agreementDoc = await Agreement.findOne({ projectId: dispute.projectId }).sort({ createdAt: -1 }).session(session);
+      if (agreementDoc && agreementDoc.status !== "cancelled" && agreementDoc.status !== "completed") {
+        if (decision === "client_favor") {
+          agreementDoc.status = "cancelled";
+        } else if (decision === "freelancer_favor" || decision === "split") {
+          agreementDoc.status = "completed";
+        }
+        if (decision !== "dismissed") {
+          await agreementDoc.save({ session });
+        }
       }
 
       await session.commitTransaction();
 
-      // Send notifications
+      // ============================================================
+      // EMAIL NOTIFICATIONS
+      // ============================================================
       try {
+        // Notify client
         await sendDisputeResolvedEmail(
           dispute.clientId.email,
           dispute.clientId.username,
           dispute.disputeNumber,
           decision,
-          decision === "client_favor" ? awardedAmount : null
+          decision === "client_favor" ? finalRefund : (decision === "split" ? finalRefund : null)
         );
 
+        // Notify freelancer
         await sendDisputeResolvedEmail(
           dispute.freelancerId.email,
           dispute.freelancerId.username,
           dispute.disputeNumber,
           decision,
-          decision === "freelancer_favor" ? awardedAmount : null
+          decision === "freelancer_favor" ? finalAward : (decision === "split" ? finalAward : null)
         );
       } catch (emailErr) {
         console.error("Email error:", emailErr);
       }
 
       res.json({
-        message: "Dispute resolved",
+        message: "Dispute resolved successfully",
         dispute: {
           disputeNumber: dispute.disputeNumber,
           decision,
-          awardedAmount,
+          awardedAmount: finalAward,
+          refundAmount: finalRefund,
         },
+        projectStatus: project?.status,
       });
     } catch (err) {
       await session.abortTransaction();
       console.error("Resolve Error:", err);
-      res.status(500).json({ message: "Error resolving dispute" });
+      res.status(500).json({ message: "Error resolving dispute", error: err.message });
     } finally {
       session.endSession();
+    }
+  }
+);
+
+/**
+ * PUT /dispute/admin/:id/priority
+ * Update dispute priority
+ */
+router.put(
+  "/admin/:id/priority",
+  verifyToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { priority } = req.body;
+      const validPriorities = ["low", "medium", "high", "urgent"];
+
+      if (!isValidObjectId(id)) {
+        return res.status(400).json({ message: "Invalid dispute ID" });
+      }
+      if (!priority || !validPriorities.includes(priority)) {
+        return res.status(400).json({ message: `Priority must be one of: ${validPriorities.join(", ")}` });
+      }
+
+      const dispute = await Dispute.findById(id);
+      if (!dispute) {
+        return res.status(404).json({ message: "Dispute not found" });
+      }
+
+      dispute.priority = priority;
+      dispute.adminActions.push({
+        action: "priority_changed",
+        adminId: req.user.userId,
+        note: `Priority set to ${priority}`,
+      });
+      await dispute.save();
+
+      res.json({ message: `Priority updated to ${priority}`, dispute });
+    } catch (err) {
+      console.error("Priority Update Error:", err);
+      res.status(500).json({ message: "Error updating priority" });
+    }
+  }
+);
+
+/**
+ * POST /dispute/admin/:id/escalate
+ * Escalate dispute
+ */
+router.post(
+  "/admin/:id/escalate",
+  verifyToken,
+  authorize(["admin"]),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { note } = req.body;
+
+      if (!isValidObjectId(id)) {
+        return res.status(400).json({ message: "Invalid dispute ID" });
+      }
+
+      const dispute = await Dispute.findById(id);
+      if (!dispute) {
+        return res.status(404).json({ message: "Dispute not found" });
+      }
+
+      dispute.status = "escalated";
+      dispute.adminActions.push({
+        action: "escalated",
+        adminId: req.user.userId,
+        note: note || "Escalated to higher authority",
+      });
+      await dispute.save();
+
+      res.json({ message: "Dispute escalated", dispute });
+    } catch (err) {
+      console.error("Escalate Error:", err);
+      res.status(500).json({ message: "Error escalating dispute" });
     }
   }
 );

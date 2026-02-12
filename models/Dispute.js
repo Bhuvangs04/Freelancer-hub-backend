@@ -36,7 +36,7 @@ const ChatLogSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
-    senderRole: { type: String, enum: ["client", "freelancer"] },
+    senderRole: { type: String, enum: ["client", "freelancer", "admin"] },
     timestamp: { type: Date, required: true },
   },
   { _id: false }

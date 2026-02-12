@@ -16,6 +16,8 @@ const TransactionSchema = new mongoose.Schema(
         "refund",
         "commission",
         "received",
+        "dispute_award",
+        "dispute_refund",
       ],
       required: true,
     },

@@ -150,4 +150,116 @@ RequestMetricSchema.statics.getSlowestRequests = async function (limit = 10) {
     .select("method path latency statusCode createdAt userId");
 };
 
+/**
+ * Get stats by status code
+ */
+RequestMetricSchema.statics.getStatsByStatusCode = async function (period = "24h") {
+  const periodMs = {
+    "1h": 60 * 60 * 1000,
+    "24h": 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+  };
+
+  const since = new Date(Date.now() - (periodMs[period] || periodMs["24h"]));
+
+  return this.aggregate([
+    { $match: { createdAt: { $gte: since } } },
+    {
+      $group: {
+        _id: "$statusCode",
+        count: { $sum: 1 },
+      },
+    },
+    { $sort: { count: -1 } },
+  ]);
+};
+
+/**
+ * Get stats by user role
+ */
+RequestMetricSchema.statics.getStatsByUserRole = async function (period = "24h") {
+  const periodMs = {
+    "1h": 60 * 60 * 1000,
+    "24h": 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+  };
+
+  const since = new Date(Date.now() - (periodMs[period] || periodMs["24h"]));
+
+  return this.aggregate([
+    { $match: { createdAt: { $gte: since }, userRole: { $exists: true, $ne: null } } },
+    {
+      $group: {
+        _id: "$userRole",
+        count: { $sum: 1 },
+        avgLatency: { $avg: "$latency" },
+      },
+    },
+    { $sort: { count: -1 } },
+  ]);
+};
+
+/**
+ * Get stats by platform (User Agent)
+ */
+RequestMetricSchema.statics.getStatsByPlatform = async function (period = "24h") {
+  const periodMs = {
+    "1h": 60 * 60 * 1000,
+    "24h": 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+  };
+
+  const since = new Date(Date.now() - (periodMs[period] || periodMs["24h"]));
+
+  // MongoDB doesn't have great regex support in aggregation for parsing UA strings efficiently
+  // So we'll fetch distinct user agents and group them loosely, or just return top UAs
+  // For a "Real App" feel, let's just group by exact UA string for now and process in frontend or simple grouping here
+
+  return this.aggregate([
+    { $match: { createdAt: { $gte: since }, userAgent: { $exists: true, $ne: null } } },
+    {
+      $group: {
+        _id: "$userAgent",
+        count: { $sum: 1 },
+      },
+    },
+    { $sort: { count: -1 } },
+    { $limit: 10 }
+  ]);
+};
+
+/**
+ * Get time-series stats (Traffic, Latency, Errors over time)
+ */
+RequestMetricSchema.statics.getTimeSeriesStats = async function (period = "24h") {
+  const periodMs = {
+    "1h": 60 * 60 * 1000,
+    "24h": 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+  };
+  const since = new Date(Date.now() - (periodMs[period] || periodMs["24h"]));
+
+  // Define date format for grouping
+  let format = "%H:00"; // Default to hourly
+  if (period === "1h") format = "%H:%M";
+  if (period === "7d") format = "%Y-%m-%d";
+
+  const stats = await this.aggregate([
+    { $match: { createdAt: { $gte: since } } },
+    {
+      $group: {
+        _id: { $dateToString: { format: format, date: "$createdAt" } },
+        count: { $sum: 1 },
+        avgLatency: { $avg: "$latency" },
+        errorCount: { $sum: { $cond: [{ $gte: ["$statusCode", 400] }, 1, 0] } },
+        // p95 requires MongoDB 7.0+, fallback to max if needed or use avg
+        maxLatency: { $max: "$latency" }
+      }
+    },
+    { $sort: { _id: 1 } }
+  ]);
+
+  return stats;
+};
+
 module.exports = mongoose.model("RequestMetric", RequestMetricSchema);
