@@ -164,6 +164,7 @@ app.use("/api/vi/finance", finance);
 
 // Admin Panel
 app.use("/admin", admin);
+app.use("/admin", require("./routes/adminSettings"));
 app.use("/admin/metrics", metrics);
 
 // ============================================================================

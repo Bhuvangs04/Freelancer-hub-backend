@@ -233,10 +233,14 @@ router.get(
     try {
       const userId = req.user.userId;
 
+      console.log(userId)
+
       const user = await company
         .findOne({ userId })
         .select("companyName Industry Position type")
         .populate("userId", "username email profilePictureUrl ");
+
+      console.log(user)
 
       const projects = await Project.find({ clientId: userId }).select(
         "_id title description budget deadline skillsRequired status freelancerId createdAt"

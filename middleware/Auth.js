@@ -70,6 +70,7 @@ async function verifyToken(req, res, next) {
     req.user = decoded;
     next();
   } catch (err) {
+    console.log(err)
     if (err.name === "TokenExpiredError") {
       return res.status(401).json({
         error: "Token expired. Please login again."

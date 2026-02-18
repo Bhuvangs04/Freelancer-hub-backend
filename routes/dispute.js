@@ -434,7 +434,7 @@ router.post(
 router.post(
   "/:id/message",
   verifyToken,
-  authorize(["client", "freelancer", "admin"]),
+  authorize(["client", "freelancer", "admin", "super_admin"]),
   async (req, res) => {
     try {
       const userId = req.user.userId;
@@ -458,7 +458,7 @@ router.post(
       // Verify access
       const isFiler = dispute.filedBy.toString() === userId;
       const isRespondent = dispute.filedAgainst.toString() === userId;
-      const isAdmin = userRole === "admin";
+      const isAdmin = userRole === "admin" || userRole === "super_admin";
 
       if (!isFiler && !isRespondent && !isAdmin) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -529,7 +529,7 @@ router.get(
 router.get(
   "/:id",
   verifyToken,
-  authorize(["client", "freelancer", "admin"]),
+  authorize(["client", "freelancer", "admin", "super_admin"]),
   async (req, res) => {
     try {
       const userId = req.user.userId;
@@ -558,7 +558,7 @@ router.get(
       const respondentId = dispute.filedAgainst?._id?.toString() || dispute.filedAgainst?.toString();
       const isFiler = filerId === userId;
       const isRespondent = respondentId === userId;
-      const isAdmin = req.user.role === "admin";
+      const isAdmin = req.user.role === "admin" || req.user.role === "super_admin";
 
       if (!isFiler && !isRespondent && !isAdmin) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -599,7 +599,7 @@ router.get(
 router.get(
   "/admin/dashboard",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { status, priority, limit } = req.query;
@@ -627,7 +627,7 @@ router.get(
 router.post(
   "/admin/:id/assign",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const adminId = req.user.userId;
@@ -671,7 +671,7 @@ router.post(
 router.post(
   "/admin/:id/resolve",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     const session = await mongoose.startSession();
 
@@ -937,7 +937,7 @@ router.post(
 router.put(
   "/admin/:id/priority",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { id } = req.params;
@@ -979,7 +979,7 @@ router.put(
 router.post(
   "/admin/:id/escalate",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { id } = req.params;

@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 const { verifyToken, authorize } = require("../middleware/Auth");
 const { createTokenForUser } = require("../middleware/Auth");
 const User = require("../models/User");
@@ -147,11 +148,28 @@ router.post("/:userDetails/login", async (req, res) => {
         }
       }
 
-      // Check if password change is required
+      // Check if password change is required — issue temporary token for password change
       if (admin.mustChangePassword) {
-        return res.status(403).json({
+        const tempToken = jwt.sign(
+          { userId: admin._id, username: admin.username, role: admin.role, mustChangePassword: true },
+          process.env.JWT_SECRET,
+          { expiresIn: "10m" }
+        );
+        res.cookie("token", tempToken, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "strict",
+          maxAge: 10 * 60 * 1000, // 10 minutes
+        });
+        return res.status(200).json({
           message: "Password change required",
           requiresPasswordChange: true,
+          admin: {
+            _id: admin._id,
+            username: admin.username,
+            email: admin.email,
+            role: admin.role,
+          },
         });
       }
 
@@ -161,7 +179,7 @@ router.post("/:userDetails/login", async (req, res) => {
       await admin.save();
 
       user = admin;
-      tokenRole = "admin";
+      tokenRole = admin.role; // "admin" or "super_admin"
     }
     // ================================================================
     // USER LOGIN (Client/Freelancer)
@@ -245,7 +263,7 @@ router.post("/:userDetails/login", async (req, res) => {
 router.post(
   "/admin/change-password",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     const { currentPassword, newPassword, totp_code } = req.body;
 
@@ -329,7 +347,7 @@ router.post(
 router.post(
   "/admin/disable-2fa",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     const { secretCode, totp_code } = req.body;
 

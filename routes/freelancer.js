@@ -514,16 +514,20 @@ router.get(
 router.post(
   "/freelancer/update",
   verifyToken,
-  authorize(["freelancer"]),
+  authorize(["freelancer", "client"]),
   async (req, res) => {
     const userId = req.user.userId;
 
     try {
       const { bio, skills, projects, experiences, location, title } = req.body;
 
-      if (!bio && !skills && !projects && !experiences && !location && !title) {
-        return res.status(400).json({ message: "No updates provided" });
+      if (req.user.role === "freelancer") {
+        if (!bio && !skills && !projects && !experiences && !location && !title) {
+          return res.status(400).json({ message: "No updates provided" });
+        }
+
       }
+
 
       let profile = await User.findById(userId);
       if (!profile)

@@ -68,7 +68,7 @@ const scanFile = async (file, allowedTypes, maxSize) => {
 router.get(
   "/dashboard-overview",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const [
@@ -133,7 +133,7 @@ router.get(
 router.get(
   "/users",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { page = 1, limit = 20, search, role, status } = req.query;
@@ -179,7 +179,7 @@ router.get(
 router.get(
   "/users/:userId",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const user = await User.findById(req.params.userId).select(
@@ -198,7 +198,7 @@ router.get(
 router.put(
   "/users/:userId/block",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { reason, duration } = req.body; // duration in days, null = permanent
@@ -240,7 +240,7 @@ router.put(
 router.put(
   "/users/:userId/unblock",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const user = await User.findById(req.params.userId);
@@ -274,7 +274,7 @@ router.put(
 router.get(
   "/projects",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { page = 1, limit = 20, status, search } = req.query;
@@ -315,7 +315,7 @@ router.get(
 router.get(
   "/projects/:projectId",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const project = await Project.findById(req.params.projectId)
@@ -339,7 +339,7 @@ router.get(
 router.delete(
   "/projects/:projectId",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { reason } = req.body;
@@ -370,7 +370,7 @@ router.delete(
 router.get(
   "/categories",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const categories = await Category.find().sort({ name: 1 });
@@ -384,7 +384,7 @@ router.get(
 router.post(
   "/categories",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { name, description } = req.body;
@@ -420,7 +420,7 @@ router.post(
 router.put(
   "/categories/:id",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { name, description, isActive } = req.body;
@@ -449,7 +449,7 @@ router.put(
 router.delete(
   "/categories/:id",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const category = await Category.findByIdAndDelete(req.params.id);
@@ -478,7 +478,7 @@ router.delete(
 router.get(
   "/escrow",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { page = 1, limit = 20, status } = req.query;
@@ -517,7 +517,7 @@ router.get(
 router.get(
   "/escrow/project/:projectId",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const escrow = await Escrow.findOne({ projectId: req.params.projectId })
@@ -537,7 +537,7 @@ router.get(
 router.put(
   "/escrow/:escrowId/edit",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { newAmount, reason } = req.body;
@@ -586,7 +586,7 @@ router.put(
 router.put(
   "/escrow/:escrowId/release",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { reason } = req.body;
@@ -630,7 +630,7 @@ router.put(
 router.put(
   "/escrow/:escrowId/refund",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { reason } = req.body;
@@ -675,7 +675,7 @@ router.put(
 router.put(
   "/escrow/:escrowId/block",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { reason } = req.body;
@@ -719,7 +719,7 @@ router.put(
 router.get(
   "/settings/platform",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const settings = await SiteSettings.getSettings();
@@ -737,7 +737,7 @@ router.get(
 router.put(
   "/settings/platform",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const {
@@ -777,7 +777,7 @@ router.put(
 router.get(
   "/settings/site",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const settings = await SiteSettings.getSettings();
@@ -797,7 +797,7 @@ router.get(
 router.put(
   "/settings/site",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   upload.single("logo"),
   async (req, res) => {
     try {
@@ -847,7 +847,7 @@ router.put(
 router.get(
   "/content/:type",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const validTypes = ["about_us", "terms_and_conditions", "privacy_policy"];
@@ -873,7 +873,7 @@ router.get(
 router.put(
   "/content/:type",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const validTypes = ["about_us", "terms_and_conditions", "privacy_policy"];
@@ -908,7 +908,7 @@ router.put(
 router.get(
   "/reviews",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { page = 1, limit = 20 } = req.query;
@@ -944,7 +944,7 @@ router.get(
 router.delete(
   "/reviews/:reviewId",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { reason } = req.body;
@@ -978,7 +978,7 @@ router.delete(
 router.get(
   "/reports/users/excel",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const users = await User.find().select("-password -__v");
@@ -1021,7 +1021,7 @@ router.get(
 router.get(
   "/reports/projects/excel",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const projects = await Project.find()
@@ -1066,7 +1066,7 @@ router.get(
 router.get(
   "/reports/transactions/excel",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const transactions = await PaymentSchema.find().populate(
@@ -1119,7 +1119,7 @@ router.get(
 router.get(
   "/reports/payouts/excel",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const transactions = await AdminWithdrawSchema.find().populate(
@@ -1177,7 +1177,7 @@ router.get(
 router.get(
   "/activity-logs",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { page = 1, limit = 50, action, adminId } = req.query;
@@ -1219,7 +1219,7 @@ router.get(
 router.get(
   "/all/transaction",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const all = await PaymentSchema.find().populate("userId", "username");
@@ -1235,7 +1235,7 @@ router.get(
 router.get(
   "/transaction/:projectId",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const all = await PaymentSchema.findOne({
@@ -1253,7 +1253,7 @@ router.get(
 router.get(
   "/pay-out/freelancers",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const payouts = await AdminWithdrawSchema.find().populate(
@@ -1272,7 +1272,7 @@ router.get(
 router.post(
   "/pay-out/freelancers/:freelancerId",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { freelancerId } = req.params;
@@ -1310,7 +1310,7 @@ router.post(
 router.get(
   "/disputes",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const disputes = await DisputeSchema.find()
