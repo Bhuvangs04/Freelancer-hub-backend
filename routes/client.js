@@ -7,14 +7,14 @@ const User = require("../models/User");
 const Project = require("../models/Project");
 const Payment = require("../models/Payment");
 const BidSchema = require("../models/Bid");
-const Transaction = require("../models/Transaction");
+const Wallet = require("../models/Wallet");
+const WalletTransaction = require("../models/WalletTransaction");
 const UserSkillSchema = require("../models/UserSkill");
 const OldProjectsSchema = require("../models/OldProjects");
 const company = require("../models/Company-clients");
 const Action = require("../models/ActionSchema");
 const OnGoingSchema = require("../models/OnGoingProject.Schema");
 const ChatSchema = require("../models/chat_sys");
-
 const Escrow = require("../models/Escrow");
 const ReviewSchema = require("../models/Review");
 
@@ -258,11 +258,10 @@ router.get(
         })
       );
 
-      const escrows = await Escrow.find({ clientId: req.user.userId });
-
-      // Separate funded and refunded escrows
-      const fundedEscrows = escrows.filter((e) => e.status === "funded");
-      const total_balance = fundedEscrows.reduce((sum, e) => sum + e.amount, 0);
+      // ── GLOBAL WALLET: client's locked (escrow) and available balance ──
+      const wallet = await Wallet.findOne({ userId: req.user.userId });
+      const total_balance = wallet ? wallet.escrowBalance : 0;
+      const available_balance = wallet ? wallet.balance : 0;
 
       await logActivity(req.user.userId, "Viewed profile");
       const LogActivity = await Action.find({ userId: req.user.userId })
@@ -271,7 +270,7 @@ router.get(
         .limit(30);
       res
         .status(200)
-        .json({ user, projects: updatedProjects, total_balance, LogActivity });
+        .json({ user, projects: updatedProjects, total_balance, available_balance, LogActivity });
     } catch (error) {
       console.error(error);
       res.status(500).send({ message: "Error fetching profile" });
@@ -474,57 +473,50 @@ router.get(
       const user = await User.findById(req.user.userId);
       if (!user) return res.status(404).json({ message: "User not found" });
 
-      // Fetch all escrows for the user
-      const escrows = await Escrow.find({ clientId: req.user.userId });
+      // ── GLOBAL WALLET: single source of truth for balances ──
+      const wallet = await Wallet.findOne({ userId: req.user.userId });
+      const available_balance = wallet ? wallet.balance : 0;
+      const escrow_balance = wallet ? wallet.escrowBalance : 0;
 
-      // Separate funded and refunded escrows
-      const fundedEscrows = escrows.filter((e) => e.status === "funded");
-      const refundedEscrows = escrows.filter((e) => e.status === "refunded");
+      // All WalletTransactions for this client (last 100)
+      const walletTxns = await WalletTransaction.find({ userId: req.user.userId })
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .populate({ path: "referenceId", model: "Project", select: "title" })
+        .lean();
 
-      // Calculate total balances
-      const total_balance = fundedEscrows.reduce((sum, e) => sum + e.amount, 0);
-      const refunded_balance = refundedEscrows.reduce(
-        (sum, e) => sum + (e.refundedAmount || 0),
-        0
-      );
+      // Summaries from the immutable ledger
+      const total_deposited = walletTxns
+        .filter((t) => t.type === "deposit")
+        .reduce((sum, t) => sum + t.amount, 0);
 
-      // Get all transactions related to the client's escrows
-      const transactions = await Transaction.find({
-        escrowId: { $in: escrows.map((e) => e._id) },
-      }).populate({
-        path: "escrowId",
-        populate: { path: "projectId", select: "title" },
-      });
+      const total_withdrawn = walletTxns
+        .filter((t) => t.type === "withdrawal")
+        .reduce((sum, t) => sum + t.amount, 0);
 
-      let total_deposited = 0;
-      let total_withdrawn = 0;
-      let transaction_history = [];
+      const total_refunded = walletTxns
+        .filter((t) => t.type === "escrow_refund")
+        .reduce((sum, t) => sum + t.amount, 0);
 
-      transactions.forEach((transaction) => {
-        if (transaction.type === "deposit") {
-          total_deposited += transaction.amount;
-        } else if (["withdrawal"].includes(transaction.type)) {
-          total_withdrawn += transaction.amount;
-        } 
-        // Note: 'refund' and 'dispute_refund' are money returned to client, not withdrawals
-
-        transaction_history.push({
-          projectId: transaction.escrowId?.projectId?._id,
-          projectTitle:
-            transaction.escrowId?.projectId?.title || "Unknown Project",
-          type: transaction.type,
-          status: transaction.status,
-          amount: transaction.amount,
-          timestamp: transaction.createdAt,
-        });
-      });
+      const transaction_history = walletTxns.map((t) => ({
+        projectTitle: t.referenceId?.title || "N/A",
+        projectId: t.referenceId?._id || "N/A",
+        type: t.type,
+        status: t.status,
+        amount: t.amount,
+        balanceAfter: t.balanceAfter,
+        escrowBalanceAfter: t.escrowBalanceAfter,
+        description: t.description,
+        timestamp: t.createdAt,
+      }));
 
       res.status(200).json({
-        total_balance, // Only funded escrows
-        refunded_balance, // Shows refunded amounts separately
-        total_deposited, // Total amount deposited
-        total_withdrawn, // Includes both withdrawals and refunds
-        transaction_history, // Shows all transactions (including refunds)
+        available_balance,     // free to withdraw
+        escrow_balance,        // locked in active projects
+        total_deposited,
+        total_withdrawn,
+        total_refunded,
+        transaction_history,
       });
     } catch (error) {
       console.error(error);

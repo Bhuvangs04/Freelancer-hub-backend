@@ -5,10 +5,10 @@ const { verifyToken, authorize } = require("../middleware/Auth");
 const Milestone = require("../models/Milestone");
 const Agreement = require("../models/Agreement");
 const Project = require("../models/Project");
-const FreelancerEscrow = require("../models/FreelancerEscrow");
 const Transaction = require("../models/Transaction");
 const sendEmail = require("../utils/sendEmail");
 const Activity = require("../models/ActionSchema");
+const walletHelper = require("../utils/walletHelper");
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -372,27 +372,20 @@ router.post(
         return res.status(403).json({ message: "Unauthorized" });
       }
 
-      // Confirm and release
+      // Confirm and release milestone
       await milestone.confirm();
       await milestone.release();
 
-      // Create freelancer escrow payment
-      const freelancerEscrow = new FreelancerEscrow({
-        projectId: milestone.projectId,
-        freelancerId: milestone.freelancerId._id,
-        amount: milestone.finalAmount,
-        status: "paid",
-      });
-      await freelancerEscrow.save({ session });
-
-      // Record transaction
-      await Transaction.create([{
-        escrowId: freelancerEscrow._id,
-        type: "release",
-        amount: milestone.finalAmount,
-        status: "completed",
-        description: `Milestone payment: ${milestone.title}`,
-      }], { session });
+      // ── GLOBAL WALLET: release milestone funds from client escrow → freelancer balance ──
+      await walletHelper.releaseEscrow(
+        clientId,
+        milestone.freelancerId._id,
+        milestone.finalAmount,
+        null,   // no single Escrow doc id for milestones — project's escrow holds it
+        milestone.projectId,
+        `Milestone payment: ${milestone.title}`,
+        session
+      );
 
       // Start next milestone if exists
       const nextMilestone = await Milestone.findOne({

@@ -175,6 +175,16 @@ const SiteSettings = require("./models/SiteSettings");
 app.get("/api/vi/settings/public", async (_req, res) => {
   try {
     const settings = await SiteSettings.getSettings();
+    if (!settings) {
+      return res.status(404).json({ message: "Settings not found" });
+    }
+    if (settings.maintenanceMode) {
+      return res.json({
+        message: "Maintenance mode is enabled",
+        maintenanceMode: settings.maintenanceMode,
+        maintenanceMessage: settings.maintenanceMessage,
+      });
+    }
     res.json({
       platformCommissionPercent: settings.platformCommissionPercent,
       siteName: settings.siteName,

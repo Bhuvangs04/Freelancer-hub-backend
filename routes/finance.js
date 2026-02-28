@@ -2,8 +2,8 @@ const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 const { verifyToken, authorize } = require("../middleware/Auth");
-const Transaction = require("../models/Transaction");
-const FreelancerEscrow = require("../models/FreelancerEscrow");
+const WalletTransaction = require("../models/WalletTransaction");
+const Wallet = require("../models/Wallet");
 const Milestone = require("../models/Milestone");
 const Agreement = require("../models/Agreement");
 const Project = require("../models/Project");
@@ -18,38 +18,6 @@ const isValidObjectId = (id) => {
     mongoose.Types.ObjectId.isValid(id) &&
     new mongoose.Types.ObjectId(id).toString() === id
   );
-};
-
-/**
- * Get date range for a specific period
- */
-const getDateRange = (period) => {
-  const now = new Date();
-  let start, end;
-
-  switch (period) {
-    case "today":
-      start = new Date(now.setHours(0, 0, 0, 0));
-      end = new Date();
-      break;
-    case "week":
-      start = new Date(now.setDate(now.getDate() - 7));
-      end = new Date();
-      break;
-    case "month":
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
-      end = new Date();
-      break;
-    case "year":
-      start = new Date(now.getFullYear(), 0, 1);
-      end = new Date();
-      break;
-    default:
-      start = new Date(0);
-      end = new Date();
-  }
-
-  return { start, end };
 };
 
 /**
@@ -69,7 +37,7 @@ const formatCurrency = (amount) => {
 
 /**
  * GET /finance/dashboard
- * Get comprehensive income dashboard
+ * Get comprehensive income dashboard for a freelancer
  */
 router.get(
   "/dashboard",
@@ -79,31 +47,45 @@ router.get(
     try {
       const freelancerId = req.user.userId;
 
-      // Get all escrow payments
-      const payments = await FreelancerEscrow.find({
-        freelancerId,
-        status: "paid",
-      }).populate("projectId", "title clientId");
+      // ── Wallet snapshot ──
+      const wallet = await Wallet.findOne({ userId: freelancerId });
+      const availableBalance = wallet ? wallet.balance : 0;
+      const escrowBalance = wallet ? wallet.escrowBalance : 0;
+
+      // ── All completed payments received by freelancer ──
+      const payments = await WalletTransaction.find({
+        userId: freelancerId,
+        type: "escrow_release",
+        status: "completed",
+        amount: { $gt: 0 }, // credit side only
+      })
+        .populate({ path: "referenceId", model: "Project", select: "title clientId" })
+        .sort({ createdAt: -1 });
 
       // Calculate totals
       const totalEarnings = payments.reduce((sum, p) => sum + p.amount, 0);
 
       // This month
       const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-      const thisMonthPayments = payments.filter(p => new Date(p.createdAt) >= monthStart);
-      const thisMonthEarnings = thisMonthPayments.reduce((sum, p) => sum + p.amount, 0);
+      const thisMonthEarnings = payments
+        .filter((p) => new Date(p.createdAt) >= monthStart)
+        .reduce((sum, p) => sum + p.amount, 0);
 
       // This year
       const yearStart = new Date(new Date().getFullYear(), 0, 1);
-      const thisYearPayments = payments.filter(p => new Date(p.createdAt) >= yearStart);
-      const thisYearEarnings = thisYearPayments.reduce((sum, p) => sum + p.amount, 0);
+      const thisYearEarnings = payments
+        .filter((p) => new Date(p.createdAt) >= yearStart)
+        .reduce((sum, p) => sum + p.amount, 0);
 
-      // Pending payments
+      // Pending milestone earnings
       const pendingMilestones = await Milestone.find({
         freelancerId,
         status: { $in: ["submitted", "confirmed"] },
       });
-      const pendingAmount = pendingMilestones.reduce((sum, m) => sum + (m.finalAmount || m.amount), 0);
+      const pendingAmount = pendingMilestones.reduce(
+        (sum, m) => sum + (m.finalAmount || m.amount),
+        0
+      );
 
       // Project stats
       const completedProjects = await Agreement.countDocuments({
@@ -116,13 +98,13 @@ router.get(
         status: "active",
       });
 
-      // Average per project
-      const avgPerProject = completedProjects > 0 ? totalEarnings / completedProjects : 0;
+      const avgPerProject =
+        completedProjects > 0 ? totalEarnings / completedProjects : 0;
 
       // Top clients
       const clientMap = {};
       for (const payment of payments) {
-        const clientId = payment.projectId?.clientId?.toString();
+        const clientId = payment.referenceId?.clientId?.toString();
         if (clientId) {
           clientMap[clientId] = (clientMap[clientId] || 0) + payment.amount;
         }
@@ -133,10 +115,11 @@ router.get(
         .slice(0, 5)
         .map(([id]) => id);
 
-      const topClients = await User.find({ _id: { $in: topClientIds } })
-        .select("username companyName");
+      const topClients = await User.find({ _id: { $in: topClientIds } }).select(
+        "username companyName"
+      );
 
-      const topClientsData = topClients.map(client => ({
+      const topClientsData = topClients.map((client) => ({
         name: client.companyName || client.username,
         totalPaid: clientMap[client._id.toString()],
       }));
@@ -146,22 +129,32 @@ router.get(
       for (let i = 11; i >= 0; i--) {
         const monthDate = new Date();
         monthDate.setMonth(monthDate.getMonth() - i);
-        const monthStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
-        const monthEnd = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
+        const mStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+        const mEnd = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
 
-        const monthPayments = payments.filter(p => {
-          const paymentDate = new Date(p.createdAt);
-          return paymentDate >= monthStart && paymentDate <= monthEnd;
+        const monthPayments = payments.filter((p) => {
+          const d = new Date(p.createdAt);
+          return d >= mStart && d <= mEnd;
         });
 
         monthlyBreakdown.push({
-          month: monthStart.toLocaleDateString("en-US", { month: "short", year: "numeric" }),
+          month: mStart.toLocaleDateString("en-US", {
+            month: "short",
+            year: "numeric",
+          }),
           earnings: monthPayments.reduce((sum, p) => sum + p.amount, 0),
-          projects: new Set(monthPayments.map(p => p.projectId?._id?.toString())).size,
+          projects: new Set(
+            monthPayments.map((p) => p.referenceId?._id?.toString())
+          ).size,
         });
       }
 
       res.json({
+        wallet: {
+          availableBalance,
+          escrowBalance,
+          totalOwned: availableBalance + escrowBalance,
+        },
         summary: {
           totalEarnings,
           thisMonthEarnings,
@@ -173,9 +166,9 @@ router.get(
         },
         topClients: topClientsData,
         monthlyBreakdown,
-        recentPayments: payments.slice(0, 10).map(p => ({
+        recentPayments: payments.slice(0, 10).map((p) => ({
           amount: p.amount,
-          projectTitle: p.projectId?.title || "Unknown",
+          projectTitle: p.referenceId?.title || "Unknown",
           date: p.createdAt,
         })),
       });
@@ -188,7 +181,7 @@ router.get(
 
 /**
  * GET /finance/tax-summary/:year
- * Get tax-ready earnings summary
+ * Get tax-ready earnings summary for a specific year
  */
 router.get(
   "/tax-summary/:year",
@@ -206,25 +199,22 @@ router.get(
       const yearStart = new Date(year, 0, 1);
       const yearEnd = new Date(year, 11, 31, 23, 59, 59);
 
-      // Get all payments for the year
-      const payments = await FreelancerEscrow.find({
-        freelancerId,
-        status: "paid",
+      // All earned (released) payments for the year
+      const payments = await WalletTransaction.find({
+        userId: freelancerId,
+        type: "escrow_release",
+        status: "completed",
+        amount: { $gt: 0 },
         createdAt: { $gte: yearStart, $lte: yearEnd },
-      }).populate("projectId", "title clientId");
+      }).populate({ path: "referenceId", model: "Project", select: "title clientId" });
 
-      // Get user details
       const user = await User.findById(freelancerId).select("username email");
-
-      // Calculate totals
       const grossEarnings = payments.reduce((sum, p) => sum + p.amount, 0);
 
-      // Platform fee (estimate 10%)
       const platformFeeRate = 0.1;
       const estimatedPlatformFee = Math.round(grossEarnings * platformFeeRate);
       const netEarnings = grossEarnings - estimatedPlatformFee;
 
-      // Quarterly breakdown
       const quarters = [
         { name: "Q1 (Jan-Mar)", start: new Date(year, 0, 1), end: new Date(year, 2, 31) },
         { name: "Q2 (Apr-Jun)", start: new Date(year, 3, 1), end: new Date(year, 5, 30) },
@@ -232,23 +222,24 @@ router.get(
         { name: "Q4 (Oct-Dec)", start: new Date(year, 9, 1), end: new Date(year, 11, 31) },
       ];
 
-      const quarterlyBreakdown = quarters.map(q => {
-        const qPayments = payments.filter(p => {
-          const date = new Date(p.createdAt);
-          return date >= q.start && date <= q.end;
+      const quarterlyBreakdown = quarters.map((q) => {
+        const qPayments = payments.filter((p) => {
+          const d = new Date(p.createdAt);
+          return d >= q.start && d <= q.end;
         });
         return {
           quarter: q.name,
           gross: qPayments.reduce((sum, p) => sum + p.amount, 0),
-          projectCount: new Set(qPayments.map(p => p.projectId?._id?.toString())).size,
+          projectCount: new Set(
+            qPayments.map((p) => p.referenceId?._id?.toString())
+          ).size,
         };
       });
 
-      // Client breakdown for TDS purposes
       const clientBreakdown = {};
       for (const payment of payments) {
-        const projectId = payment.projectId?._id?.toString();
-        const clientId = payment.projectId?.clientId?.toString();
+        const clientId = payment.referenceId?.clientId?.toString();
+        const projectId = payment.referenceId?._id?.toString();
         if (clientId) {
           if (!clientBreakdown[clientId]) {
             clientBreakdown[clientId] = { total: 0, projects: new Set() };
@@ -259,10 +250,11 @@ router.get(
       }
 
       const clientIds = Object.keys(clientBreakdown);
-      const clients = await User.find({ _id: { $in: clientIds } })
-        .select("username companyName email");
+      const clients = await User.find({ _id: { $in: clientIds } }).select(
+        "username companyName email"
+      );
 
-      const clientSummary = clients.map(c => ({
+      const clientSummary = clients.map((c) => ({
         name: c.companyName || c.username,
         email: c.email,
         totalPaid: clientBreakdown[c._id.toString()].total,
@@ -271,20 +263,16 @@ router.get(
 
       res.json({
         taxYear: year,
-        freelancer: {
-          name: user.username,
-          email: user.email,
-        },
-        earnings: {
-          gross: grossEarnings,
-          estimatedPlatformFee,
-          net: netEarnings,
-        },
+        freelancer: { name: user.username, email: user.email },
+        earnings: { gross: grossEarnings, estimatedPlatformFee, net: netEarnings },
         quarterlyBreakdown,
         clientSummary: clientSummary.sort((a, b) => b.totalPaid - a.totalPaid),
-        totalProjects: new Set(payments.map(p => p.projectId?._id?.toString())).size,
+        totalProjects: new Set(
+          payments.map((p) => p.referenceId?._id?.toString())
+        ).size,
         paymentCount: payments.length,
-        disclaimer: "This is an estimated summary. Please consult a tax professional for accurate filing.",
+        disclaimer:
+          "This is an estimated summary. Please consult a tax professional for accurate filing.",
       });
     } catch (err) {
       console.error("Tax Summary Error:", err);
@@ -295,7 +283,7 @@ router.get(
 
 /**
  * POST /finance/invoice/generate
- * Generate a simple invoice
+ * Generate a simple HTML invoice from milestones or custom items
  */
 router.post(
   "/invoice/generate",
@@ -306,19 +294,20 @@ router.post(
       const freelancerId = req.user.userId;
       const { projectId, milestoneId, customItems } = req.body;
 
-      // Get freelancer details
-      const freelancer = await User.findById(freelancerId)
-        .select("username email location");
+      const freelancer = await User.findById(freelancerId).select(
+        "username email location"
+      );
 
       let invoiceItems = [];
       let client = null;
       let projectTitle = "";
 
       if (projectId && isValidObjectId(projectId)) {
-        // Generate from project/milestone
-        const project = await Project.findById(projectId)
-          .populate("clientId", "username email companyName");
-        
+        const project = await Project.findById(projectId).populate(
+          "clientId",
+          "username email companyName"
+        );
+
         if (!project) {
           return res.status(404).json({ message: "Project not found" });
         }
@@ -335,21 +324,18 @@ router.post(
             });
           }
         } else {
-          // All completed milestones
           const milestones = await Milestone.find({
             projectId,
             freelancerId,
             status: "released",
           });
-
-          invoiceItems = milestones.map(m => ({
+          invoiceItems = milestones.map((m) => ({
             description: `Milestone ${m.milestoneNumber}: ${m.title}`,
             amount: m.finalAmount || m.amount,
           }));
         }
       } else if (Array.isArray(customItems)) {
-        // Custom invoice
-        invoiceItems = customItems.filter(item => item.description && item.amount);
+        invoiceItems = customItems.filter((item) => item.description && item.amount);
       } else {
         return res.status(400).json({ message: "Project ID or custom items required" });
       }
@@ -358,15 +344,15 @@ router.post(
         return res.status(400).json({ message: "No items for invoice" });
       }
 
-      // Calculate totals
       const subtotal = invoiceItems.reduce((sum, item) => sum + item.amount, 0);
       const platformFee = Math.round(subtotal * 0.1);
       const total = subtotal;
 
-      // Generate invoice number
-      const invoiceNumber = `INV-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      const invoiceNumber = `INV-${Date.now().toString(36).toUpperCase()}-${Math.random()
+        .toString(36)
+        .substring(2, 6)
+        .toUpperCase()}`;
 
-      // Generate HTML invoice
       const invoiceHtml = `
 <!DOCTYPE html>
 <html>
@@ -398,7 +384,6 @@ router.post(
       <p>Date: ${new Date().toLocaleDateString("en-IN")}</p>
     </div>
   </div>
-  
   <div class="parties">
     <div class="from">
       <div class="label">FROM</div>
@@ -408,42 +393,33 @@ router.post(
     </div>
     <div class="to">
       <div class="label">TO</div>
-      ${client ? `
-        <strong>${client.companyName || client.username}</strong><br>
-        ${client.email}
-      ` : "Custom Invoice"}
+      ${
+        client
+          ? `<strong>${client.companyName || client.username}</strong><br>${client.email}`
+          : "Custom Invoice"
+      }
     </div>
   </div>
-  
   ${projectTitle ? `<p><strong>Project:</strong> ${projectTitle}</p>` : ""}
-  
   <table>
     <thead>
-      <tr>
-        <th>Description</th>
-        <th class="amount">Amount</th>
-      </tr>
+      <tr><th>Description</th><th class="amount">Amount</th></tr>
     </thead>
     <tbody>
-      ${invoiceItems.map(item => `
-        <tr>
-          <td>${item.description}</td>
-          <td class="amount">${formatCurrency(item.amount)}</td>
-        </tr>
-      `).join("")}
-      <tr class="total-row">
-        <td>TOTAL</td>
-        <td class="amount">${formatCurrency(total)}</td>
-      </tr>
+      ${invoiceItems
+          .map(
+            (item) =>
+              `<tr><td>${item.description}</td><td class="amount">${formatCurrency(
+                item.amount
+              )}</td></tr>`
+          )
+          .join("")}
+      <tr class="total-row"><td>TOTAL</td><td class="amount">${formatCurrency(total)}</td></tr>
     </tbody>
   </table>
-  
   <p><strong>Platform Fee (deducted):</strong> ${formatCurrency(platformFee)}</p>
   <p><strong>Net Payable to Freelancer:</strong> ${formatCurrency(total - platformFee)}</p>
-  
-  <div class="footer">
-    <p>Generated by FreelancerHub | This is a computer-generated invoice</p>
-  </div>
+  <div class="footer"><p>Generated by FreelancerHub | This is a computer-generated invoice</p></div>
 </body>
 </html>
       `;
@@ -468,7 +444,7 @@ router.post(
 
 /**
  * GET /finance/predictions
- * Get earnings predictions
+ * Get earnings predictions based on last 6 months of WalletTransactions
  */
 router.get(
   "/predictions",
@@ -478,13 +454,14 @@ router.get(
     try {
       const freelancerId = req.user.userId;
 
-      // Get historical data (last 6 months)
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-      const payments = await FreelancerEscrow.find({
-        freelancerId,
-        status: "paid",
+      const payments = await WalletTransaction.find({
+        userId: freelancerId,
+        type: "escrow_release",
+        status: "completed",
+        amount: { $gt: 0 },
         createdAt: { $gte: sixMonthsAgo },
       });
 
@@ -492,37 +469,36 @@ router.get(
       for (let i = 5; i >= 0; i--) {
         const monthDate = new Date();
         monthDate.setMonth(monthDate.getMonth() - i);
-        const monthStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
-        const monthEnd = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
+        const mStart = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+        const mEnd = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
 
-        const monthPayments = payments.filter(p => {
-          const date = new Date(p.createdAt);
-          return date >= monthStart && date <= monthEnd;
+        const monthPayments = payments.filter((p) => {
+          const d = new Date(p.createdAt);
+          return d >= mStart && d <= mEnd;
         });
 
         monthlyEarnings.push(monthPayments.reduce((sum, p) => sum + p.amount, 0));
       }
 
-      // Calculate average and trend
       const avgMonthly = monthlyEarnings.reduce((a, b) => a + b, 0) / 6;
       const recentAvg = (monthlyEarnings[4] + monthlyEarnings[5]) / 2;
       const trend = avgMonthly > 0 ? ((recentAvg - avgMonthly) / avgMonthly) * 100 : 0;
 
-      // Pending income
       const pendingMilestones = await Milestone.find({
         freelancerId,
         status: { $in: ["in_progress", "submitted", "confirmed"] },
       });
-      const pendingIncome = pendingMilestones.reduce((sum, m) => sum + (m.finalAmount || m.amount), 0);
+      const pendingIncome = pendingMilestones.reduce(
+        (sum, m) => sum + (m.finalAmount || m.amount),
+        0
+      );
 
-      // Active agreements value
-      const activeAgreements = await Agreement.find({
-        freelancerId,
-        status: "active",
-      });
-      const activeProjectsValue = activeAgreements.reduce((sum, a) => sum + a.agreedAmount, 0);
+      const activeAgreements = await Agreement.find({ freelancerId, status: "active" });
+      const activeProjectsValue = activeAgreements.reduce(
+        (sum, a) => sum + a.agreedAmount,
+        0
+      );
 
-      // Predictions
       const nextMonthPrediction = Math.round(avgMonthly * (1 + trend / 100));
       const nextQuarterPrediction = nextMonthPrediction * 3;
       const yearEndPrediction = nextMonthPrediction * (12 - new Date().getMonth());
@@ -543,13 +519,54 @@ router.get(
           nextMonth: nextMonthPrediction,
           nextQuarter: nextQuarterPrediction,
           yearEnd: yearEndPrediction,
-          confidence: monthlyEarnings.filter(e => e > 0).length >= 3 ? "medium" : "low",
+          confidence:
+            monthlyEarnings.filter((e) => e > 0).length >= 3 ? "medium" : "low",
         },
         disclaimer: "Predictions are based on historical data and may vary.",
       });
     } catch (err) {
       console.error("Predictions Error:", err);
       res.status(500).json({ message: "Error generating predictions" });
+    }
+  }
+);
+
+/**
+ * GET /finance/wallet
+ * Get the current user's wallet details and recent transaction history
+ */
+router.get(
+  "/wallet",
+  verifyToken,
+  authorize(["freelancer", "client"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.userId;
+
+      const wallet = await Wallet.findOne({ userId });
+      if (!wallet) {
+        return res.json({
+          balance: 0,
+          escrowBalance: 0,
+          transactions: [],
+        });
+      }
+
+      const transactions = await WalletTransaction.find({ userId })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .select("type amount balanceAfter escrowBalanceAfter description status createdAt referenceModel");
+
+      res.json({
+        balance: wallet.balance,
+        escrowBalance: wallet.escrowBalance,
+        totalOwned: wallet.balance + wallet.escrowBalance,
+        currency: wallet.currency,
+        transactions,
+      });
+    } catch (err) {
+      console.error("Get Wallet Error:", err);
+      res.status(500).json({ message: "Error fetching wallet" });
     }
   }
 );

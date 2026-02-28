@@ -1,31 +1,110 @@
 const mongoose = require("mongoose");
 
 // ============================================================================
-// GITHUB DATA SUB-SCHEMA
+// GITHUB DATA SUB-SCHEMA (Comprehensive - Authenticated API)
 // ============================================================================
+
+const GitHubRepoSchema = new mongoose.Schema(
+  {
+    name: { type: String },
+    fullName: { type: String },
+    url: { type: String },
+    description: { type: String },
+    private: { type: Boolean, default: false },
+    fork: { type: Boolean, default: false },
+    stars: { type: Number, default: 0 },
+    forks: { type: Number, default: 0 },
+    watchers: { type: Number, default: 0 },
+    openIssues: { type: Number, default: 0 },
+    language: { type: String },
+    topics: [{ type: String }],
+    license: { type: String },
+    defaultBranch: { type: String },
+    size: { type: Number, default: 0 },
+    // Content analysis flags
+    hasReadme: { type: Boolean, default: false },
+    hasCI: { type: Boolean, default: false },
+    hasDocker: { type: Boolean, default: false },
+    hasTests: { type: Boolean, default: false },
+    // Timestamps
+    createdAt: { type: Date },
+    updatedAt: { type: Date },
+    pushedAt: { type: Date },
+  },
+  { _id: false }
+);
 
 const GitHubDataSchema = new mongoose.Schema(
   {
+    // Profile
     username: { type: String, required: true },
     profileUrl: { type: String },
     avatarUrl: { type: String },
+    name: { type: String },
+    bio: { type: String },
+    email: { type: String },
+    hireable: { type: Boolean },
+    company: { type: String },
+    blog: { type: String },
+    twitterUsername: { type: String },
+    location: { type: String },
+
+    // Repo counts
     publicRepos: { type: Number, default: 0 },
+    privateRepos: { type: Number, default: 0 },
+    totalRepos: { type: Number, default: 0 },
+
+    // Social
     followers: { type: Number, default: 0 },
     following: { type: Number, default: 0 },
+
+    // Contributions
+    totalContributions: { type: Number, default: 0 },
     totalCommits: { type: Number, default: 0 },
+    commitFrequency: { type: Number, default: 0 }, // avg commits per week
+
+    // PRs
+    pullRequests: {
+      total: { type: Number, default: 0 },
+      merged: { type: Number, default: 0 },
+      open: { type: Number, default: 0 },
+    },
+
+    // Issues
+    issues: {
+      total: { type: Number, default: 0 },
+      open: { type: Number, default: 0 },
+      closed: { type: Number, default: 0 },
+    },
+
+    // Organizations
+    organizations: [
+      {
+        name: { type: String },
+        avatarUrl: { type: String },
+      },
+    ],
+
+    // Account meta
     accountAge: { type: Number }, // in months
-    languages: [{
-      name: { type: String },
-      percentage: { type: Number },
-      bytes: { type: Number },
-    }],
-    topRepositories: [{
-      name: { type: String },
-      url: { type: String },
-      stars: { type: Number },
-      forks: { type: Number },
-      language: { type: String },
-    }],
+    accountCreatedAt: { type: Date },
+
+    // Languages
+    languages: [
+      {
+        name: { type: String },
+        percentage: { type: Number },
+        bytes: { type: Number },
+      },
+    ],
+
+    // Top Repositories (detailed)
+    topRepositories: [GitHubRepoSchema],
+
+    // Extras
+    gistsCount: { type: Number, default: 0 },
+    releasesCount: { type: Number, default: 0 },
+
     lastFetchedAt: { type: Date },
   },
   { _id: false }
@@ -154,27 +233,54 @@ SkillVerificationSchema.index({ skillName: 1, status: 1, level: -1 });
 
 /**
  * Calculate verification score based on all data
+ * GitHub (max 50), Challenge (max 25), Portfolio (max 15), Certificate (max 10)
  */
 SkillVerificationSchema.methods.calculateScore = function () {
   let score = 0;
 
-  // GitHub contribution (max 40 points)
+  // GitHub contribution (max 50 points)
   if (this.githubVerification) {
     const gh = this.githubVerification;
-    score += Math.min(gh.publicRepos * 2, 10); // repos
-    score += Math.min(gh.totalCommits / 100, 15); // commits
-    score += Math.min(gh.followers / 10, 10); // followers
-    score += Math.min(gh.accountAge / 2, 5); // account age
+
+    // Repos (max 10)
+    score += Math.min(gh.publicRepos * 1.5 + (gh.privateRepos || 0) * 2, 10);
+
+    // Commits / Contributions (max 15)
+    const commitScore = Math.min((gh.totalCommits || 0) / 200, 8);
+    const contribScore = Math.min((gh.totalContributions || 0) / 500, 7);
+    score += Math.min(commitScore + contribScore, 15);
+
+    // Followers (max 5)
+    score += Math.min((gh.followers || 0) / 20, 5);
+
+    // Account age (max 5)
+    score += Math.min((gh.accountAge || 0) / 6, 5);
+
+    // Pull Requests (max 8)
+    if (gh.pullRequests) {
+      score += Math.min((gh.pullRequests.total || 0) / 25, 5);
+      score += Math.min((gh.pullRequests.merged || 0) / 20, 3);
+    }
+
+    // Organizations (max 4)
+    if (gh.organizations) {
+      score += Math.min(gh.organizations.length * 2, 4);
+    }
+
+    // Issues (max 3)
+    if (gh.issues) {
+      score += Math.min((gh.issues.total || 0) / 20, 3);
+    }
   }
 
-  // Challenge (max 30 points)
+  // Challenge (max 25 points)
   if (this.challengeResult && this.challengeResult.passed) {
-    score += (this.challengeResult.score / 100) * 30;
+    score += (this.challengeResult.score / 100) * 25;
   }
 
-  // Portfolio (max 20 points)
+  // Portfolio (max 15 points)
   if (this.portfolioVerification && this.portfolioVerification.verifiedAt) {
-    score += 20;
+    score += 15;
   }
 
   // Certificate (max 10 points)

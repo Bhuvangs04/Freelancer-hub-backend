@@ -39,7 +39,7 @@ router.get(
 router.get(
   "/summary",
   verifyToken,
-  authorize(["admin"]),
+  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { period = "24h" } = req.query;

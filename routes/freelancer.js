@@ -11,7 +11,7 @@ const AdminWithdrawSchema = require("../models/WithdrawReportsAdmin");
 const ReviewSchema = require("../models/Review");
 const OldProjectsSchema = require("../models/OldProjects");
 const Action = require("../models/ActionSchema");
-const escrow = require("../models/Escrow");
+const EscrowModel = require("../models/Escrow");
 
 const upload = multer();
 
@@ -70,67 +70,46 @@ router.get(
     try {
       const freelancerId = req.user.userId;
 
-      // Fetch freelancer's escrow records
-      const escrows = await FreelancerEscrow.find({ freelancerId });
+      // ── GLOBAL WALLET: fetch the wallet and recent transaction history ──
+      const wallet = await Wallet.findOne({ userId: freelancerId });
+      const balance = wallet ? wallet.balance : 0;
+      const escrowBalance = wallet ? wallet.escrowBalance : 0;
 
-      const adminEscrows = await AdminWithdrawSchema.find({ freelancerId });
+      const transactions = await WalletTransaction.find({ userId: freelancerId })
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .select("type amount balanceAfter escrowBalanceAfter description status createdAt referenceModel referenceId")
+        .populate({ path: "referenceId", model: "Project", select: "title status" })
+        .lean();
 
-      // Fetch transactions for each escrow
-      const escrowTransactions = await Promise.all(
-        escrows.map(async (escrow) => {
-          const transactions = await Transaction.find({ escrowId: escrow._id });
-          return { transactions };
-        })
-      );
-
-
-      const adminTransactions = await Promise.all(
-        adminEscrows.map(async (adminEscrow) => {
-          const transactions = await Transaction.find({
-            escrowId: adminEscrow._id,
-          });
-          return { escrowId: adminEscrow._id, transactions };
-        })
-      );
-
-
-      const mergedTransactions = [...escrowTransactions, ...adminTransactions];
-
-      // Fetch freelancer's projects
+      // Fetch projects the freelancer is working on
       const projects = await Project.find({ freelancerId });
 
-      // Fetch ongoing projects (tasks are embedded inside these documents)
       const ongoingProjects = await Ongoing.find({
         projectId: { $in: projects.map((p) => p._id) },
       });
 
-      // Calculate progress for each project
       const projectsWithProgress = projects.map((project) => {
         const ongoingProject = ongoingProjects.find(
-          (op) => op.projectId === project._id.toString()
+          (op) => op.projectId.toString() === project._id.toString()
         );
 
         if (ongoingProject) {
           const totalTasks = ongoingProject.tasks.length;
-          const completedTasks = ongoingProject.tasks.filter(
-            (task) => task.completed
-          ).length;
-          const progress =
-            totalTasks > 0
-              ? Math.round((completedTasks / totalTasks) * 100)
-              : 0;
-
-          return {
-            ...project.toObject(),
-            progress, // Add calculated progress
-          };
+          const completedTasks = ongoingProject.tasks.filter((t) => t.completed).length;
+          const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+          return { ...project.toObject(), progress };
         }
-
-        return { ...project.toObject(), progress: 0 }; // Default progress if no tasks found
+        return { ...project.toObject(), progress: 0 };
       });
 
       return res.status(200).json({
-        transactions: mergedTransactions,
+        wallet: {
+          balance,
+          escrowBalance,
+          totalOwned: balance + escrowBalance,
+        },
+        transactions,
         projects: projectsWithProgress,
       });
     } catch (error) {
@@ -374,7 +353,8 @@ const UserSkill = require("../models/UserSkill");
 const OldProject = require("../models/OldProjects");
 const Ongoing = require("../models/OnGoingProject.Schema");
 const Transaction = require("../models/Transaction");
-const FreelancerEscrow = require("../models/FreelancerEscrow");
+const Wallet = require("../models/Wallet");
+const WalletTransaction = require("../models/WalletTransaction");
 const PortfolioView = require("../models/PortfolioView");
 const requestIp = require("request-ip");
 const geoip = require("geoip-lite");
@@ -422,7 +402,7 @@ router.get(
       const geo = geoip.lookup(ip) || {};
 
       const freelancer = await User.findOne({ username }).select(
-        "experiences profilePictureUrl username email bio location title"
+        "experiences profilePictureUrl username email bio location title githubUsername githubData"
       );
       if (!freelancer)
         return res.status(404).json({ message: "Freelancer not found" });
@@ -790,7 +770,7 @@ router.get(
   async (req, res) => {
     try {
       // Fetch projects from escrow where no freelancer is assigned and status is funded
-      const escrowProjects = await escrow
+      const escrowProjects = await EscrowModel
         .find({ freelancerId: null, status: "funded" })
         .populate({
           path: "projectId",

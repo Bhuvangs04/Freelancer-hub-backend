@@ -8,11 +8,12 @@ const Agreement = require("../models/Agreement");
 const Milestone = require("../models/Milestone");
 const Project = require("../models/Project");
 const Escrow = require("../models/Escrow");
-const FreelancerEscrow = require("../models/FreelancerEscrow");
 const Transaction = require("../models/Transaction");
 const User = require("../models/User");
+const Wallet = require("../models/Wallet");
 const sendEmail = require("../utils/sendEmail");
 const Activity = require("../models/ActionSchema");
+const walletHelper = require("../utils/walletHelper");
 
 // ============================================================================
 // RAZORPAY SETUP
@@ -145,6 +146,16 @@ router.post(
         return res.status(403).json({ message: "Unauthorized" });
       }
 
+      // A dispute requires both parties — block if no freelancer is assigned yet
+      if (!project.freelancerId) {
+        return res.status(400).json({
+          message:
+            "This project has no assigned freelancer. " +
+            "Disputes can only be filed between a client and a freelancer. " +
+            "If you need a refund or have a billing issue, please contact support through the Help section.",
+        });
+      }
+
       // Check for existing open dispute
       const existingDispute = await Dispute.findOne({
         projectId,
@@ -158,8 +169,12 @@ router.post(
         });
       }
 
-      // Get agreement
-      const agreement = await Agreement.findOne({ projectId, status: "active" });
+      // Get agreement — match any non-cancelled agreement for this project
+      // (status can be "active" while in-progress, or "completed" after payment released)
+      const agreement = await Agreement.findOne({
+        projectId,
+        status: { $ne: "cancelled" },
+      }).sort({ version: -1, createdAt: -1 });
 
       // Create dispute
       const dispute = new Dispute({
@@ -541,7 +556,7 @@ router.get(
 
       const dispute = await Dispute.findById(id)
         .populate("projectId", "title budget description status")
-        .populate("agreementId", "agreementNumber agreedAmount")
+        .populate("agreementId", "agreementNumber agreedAmount status deliverables deadline projectDescription clientSignature freelancerSignature version createdAt")
         .populate("milestoneId", "title amount status")
         .populate("clientId", "username email")
         .populate("freelancerId", "username email")
@@ -564,18 +579,13 @@ router.get(
         return res.status(403).json({ message: "Unauthorized" });
       }
 
-      // Fetch latest agreement & escrow for this project (admin reference)
-      let agreementRef = null;
+      // Use the agreementId already stored on the dispute (snapshot of the active agreement at filing time)
+      // For admin context, also fetch the current escrow state for this project
+      const agreementRef = dispute.agreementId || null; // already populated above
       let escrowRef = null;
 
       if (dispute.projectId?._id) {
-        const projectId = dispute.projectId._id;
-
-        agreementRef = await Agreement.findOne({ projectId, status: "active" })
-          .select("agreementNumber agreedAmount status deliverables deadline projectDescription clientSignature.signed freelancerSignature.signed createdAt")
-          .lean();
-
-        escrowRef = await Escrow.findOne({ projectId })
+        escrowRef = await Escrow.findOne({ projectId: dispute.projectId._id })
           .select("amount originalAmount refundedAmount status adjustmentHistory")
           .lean();
       }
@@ -663,7 +673,7 @@ router.post(
  * Real-world flow:
  * 1. Auto-calculate amounts from escrow (admin can override for split)
  * 2. Update escrow status and record adjustment history
- * 3. Create FreelancerEscrow (for freelancer payouts) and Transaction records
+ * 3. Update Wallet balances via walletHelper (releaseEscrow / refundEscrow)
  * 4. Transition Project status (completed / cancelled / as-is)
  * 5. Update Agreement status
  * 6. Send email notifications to both parties
@@ -712,32 +722,57 @@ router.post(
         return res.status(409).json({ message: "Dispute already resolved" });
       }
 
-      // ── Load escrow (the money pool) ──
+      // ── Load escrow (project fund status tracker) ──
       const escrow = await Escrow.findOne({ projectId: dispute.projectId }).session(session);
-      const escrowAmount = escrow ? (escrow.originalAmount || escrow.amount) : 0;
+
+      // ── DOUBLE-SPEND GUARD ──
+      // Only allow resolution if the escrow doc still shows funds are locked.
+      // If a previous resolution already moved the money, the escrow status
+      // will be "released", "refunded", or "paid" — block it immediately.
+      const RESOLVABLE_STATUSES = ["funded", "adjusted"];
+      if (decision !== "dismissed") {
+        if (!escrow || !RESOLVABLE_STATUSES.includes(escrow.status)) {
+          await session.abortTransaction();
+          return res.status(409).json({
+            message: `Cannot resolve: escrow funds are no longer available (escrow status: ${escrow ? escrow.status : "not found"}
+            }). The money has already been moved in a previous resolution. No transaction created.`,
+          });
+        }
+      }
+
+      // Read the LIVE client escrow balance from the Wallet, not the stale originalAmount.
+      // This is the actual money that exists in the system right now.
+      const clientWallet = await Wallet.findOne({ userId: dispute.clientId._id }).session(session);
+      const escrowAmount = Math.min(
+        escrow.amount,                                           // Escrow doc's tracked amount
+        clientWallet ? clientWallet.escrowBalance : 0            // Actual locked balance in wallet
+      );
+
+      if (escrowAmount <= 0 && decision !== "dismissed") {
+        await session.abortTransaction();
+        return res.status(409).json({
+          message: `Cannot resolve: the client wallet has ₹0 in escrow. Funds were already moved. No transaction created.`,
+        });
+      }
 
       // ── Auto-calculate financial amounts from escrow ──
       let finalAward = 0;   // amount going to freelancer
       let finalRefund = 0;  // amount going back to client
 
       if (decision === "freelancer_favor") {
-        // Full escrow amount goes to freelancer
         finalAward = escrowAmount;
         finalRefund = 0;
       } else if (decision === "client_favor") {
-        // Full escrow amount refunded to client
         finalAward = 0;
         finalRefund = escrowAmount;
       } else if (decision === "split") {
-        // Admin specifies amounts, or default 50/50
         finalAward = (awardedAmount && awardedAmount > 0) ? awardedAmount : Math.floor(escrowAmount / 2);
         finalRefund = (refundAmount && refundAmount > 0) ? refundAmount : (escrowAmount - finalAward);
 
-        // Validate split doesn't exceed escrow
         if (finalAward + finalRefund > escrowAmount) {
           await session.abortTransaction();
           return res.status(400).json({
-            message: `Split amounts (₹${finalAward} + ₹${finalRefund} = ₹${finalAward + finalRefund}) exceed escrow (₹${escrowAmount})`,
+            message: `Split amounts (₹${finalAward} + ₹${finalRefund} = ₹${finalAward + finalRefund}) exceed available escrow (₹${escrowAmount})`,
           });
         }
       }
@@ -813,38 +848,32 @@ router.post(
       }
 
       // ============================================================
-      // FINANCIAL RECORDS — FreelancerEscrow + Transactions
+      // WALLET OPERATIONS — Global Wallet via walletHelper
       // ============================================================
 
       // ── Freelancer payout (freelancer_favor or split) ──
       if ((decision === "freelancer_favor" || decision === "split") && finalAward > 0) {
-        const freelancerEscrow = new FreelancerEscrow({
-          projectId: dispute.projectId,
-          freelancerId: dispute.freelancerId._id,
-          amount: finalAward,
-          status: "paid",
-        });
-        await freelancerEscrow.save({ session });
-
-        await Transaction.create([{
-          escrowId: freelancerEscrow._id,
-          type: "dispute_award",
-          amount: finalAward,
-          status: "completed",
-          description: `Dispute ${decision === "split" ? "split " : ""}award to freelancer — ${dispute.disputeNumber}`,
-        }], { session });
+        await walletHelper.releaseEscrow(
+          dispute.clientId._id,
+          dispute.freelancerId._id,
+          finalAward,
+          escrow ? escrow._id : null,
+          dispute.projectId,
+          `Dispute ${decision === "split" ? "split " : ""}award to freelancer — ${dispute.disputeNumber}`,
+          session
+        );
       }
 
       // ── Client refund (client_favor or split) ──
-      if ((decision === "client_favor" || decision === "split") && finalRefund > 0 && escrow) {
-        await Transaction.create([{
-          escrowId: escrow._id,
-          type: "dispute_refund",
-          amount: finalRefund,
-          status: "completed",
-          description: `Dispute ${decision === "split" ? "split " : ""}refund to client — ${dispute.disputeNumber}`,
-          RefundedId: dispute.clientId._id.toString(),
-        }], { session });
+      if ((decision === "client_favor" || decision === "split") && finalRefund > 0) {
+        await walletHelper.refundEscrow(
+          dispute.clientId._id,
+          finalRefund,
+          escrow ? escrow._id : null,
+          dispute.projectId,
+          `Dispute ${decision === "split" ? "split " : ""}refund to client — ${dispute.disputeNumber}`,
+          session
+        );
       }
 
       // ============================================================

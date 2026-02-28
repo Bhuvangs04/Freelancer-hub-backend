@@ -2,7 +2,6 @@ const express = require("express");
 const { verifyToken, authorize } = require("../middleware/Auth");
 const Razorpay = require("razorpay");
 const mongoose = require("mongoose");
-const FreelancerEscrowSchema = require("../models/FreelancerEscrow");
 const AdminWithdrawSchema = require("../models/WithdrawReportsAdmin");
 const router = express.Router();
 const Payment = require("../models/Payment");
@@ -10,7 +9,8 @@ const Escrow = require("../models/Escrow");
 const Transaction = require("../models/Transaction");
 const Project = require("../models/Project");
 const IdempotencyKey = require("../models/IdempotencyKey");
-const Agreement = require("../models/Agreement")
+const Agreement = require("../models/Agreement");
+const Wallet = require("../models/Wallet");
 const axios = require("axios");
 const sendEmail = require("../utils/sendEmail");
 const crypto = require("crypto");
@@ -18,6 +18,7 @@ const Activity = require("../models/ActionSchema");
 const fs = require("fs");
 const path = require("path");
 const Ongoing = require("../models/OnGoingProject.Schema");
+const walletHelper = require("../utils/walletHelper");
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -455,7 +456,7 @@ router.post(
         });
       }
 
-      // Create escrow record
+      // Create escrow record (status tracker for the project fund lock)
       const escrow = new Escrow({
         projectId: project_id,
         clientId: clientId,
@@ -465,18 +466,22 @@ router.post(
       });
       await escrow.save({ session });
 
-      // Record transaction
-      await Transaction.create(
-        [
-          {
-            escrowId: escrow._id,
-            type: "deposit",
-            amount: freelancerAmount,
-            status: "on_hold",
-            description: `Payment for project: ${project.title}`,
-          },
-        ],
-        { session }
+      // ── GLOBAL WALLET: credit client balance then lock into escrow ──
+      await walletHelper.creditWallet(
+        clientId,
+        freelancerAmount,
+        `Payment captured for project: ${project.title}`,
+        project._id,
+        "Project",
+        session
+      );
+      await walletHelper.holdEscrow(
+        clientId,
+        freelancerAmount,
+        escrow._id,
+        project._id,
+        `Escrow funded for project: ${project.title}`,
+        session
       );
 
       await session.commitTransaction();
@@ -587,19 +592,14 @@ router.delete(
         { session }
       );
 
-      // Record refund transaction
-      await Transaction.create(
-        [
-          {
-            escrowId: escrow._id,
-            type: "refund",
-            amount: escrow.amount,
-            status: "completed",
-            RefundedId: refundResponse.id,
-            description: `Refund for cancelled project: ${project.title}`,
-          },
-        ],
-        { session }
+      // ── GLOBAL WALLET: return locked escrow funds to client balance ──
+      await walletHelper.refundEscrow(
+        clientId,
+        escrow.amount,
+        escrow._id,
+        projectId,
+        `Refund for cancelled project: ${project.title}`,
+        session
       );
 
       // Mark project as cancelled
@@ -760,16 +760,16 @@ router.post(
       }
 
 
-      // Find and lock escrow atomically
+      // Find and lock escrow atomically (Note: freelancerId may be null initially since assign-freelancer is often bypassed)
       const escrow = await Escrow.findOneAndUpdate(
         {
           projectId: project_id,
           clientId: clientId,
-          freelancerId: freelancer_id,
           status: { $in: ["funded", "partial_refund"] }
         },
         {
           status: "released", // Lock it immediately
+          freelancerId: freelancer_id, // Assign freelancer now if it wasn't already
         },
         { session, new: true }
       );
@@ -841,7 +841,7 @@ router.post(
         });
       }
 
-      // Handle partial refund if remaining amount
+      // Handle partial refund if remaining amount (excess escrow → client wallet)
       if (remainingAmount > 0) {
         const paymentRecord = await Payment.findOne({
           projectId: project_id,
@@ -850,69 +850,45 @@ router.post(
         }).session(session);
 
         if (paymentRecord) {
-          const refundResponse = await razorpay.payments.refund(
+          // Razorpay refund for the excess amount
+          await razorpay.payments.refund(
             paymentRecord.transactionId,
             { amount: remainingAmount * 100 }
           );
 
-          await Transaction.create(
-            [
-              {
-                escrowId: escrow._id,
-                type: "refund",
-                amount: remainingAmount,
-                status: "completed",
-                RefundedId: refundResponse.id,
-                description: `Partial refund for project: ${project.title}`,
-              },
-            ],
-            { session }
+          // Return excess escrow to client wallet balance
+          await walletHelper.refundEscrow(
+            clientId,
+            remainingAmount,
+            escrow._id,
+            project_id,
+            `Partial escrow refund (excess) for project: ${project.title}`,
+            session
           );
         }
       }
 
-      // Update escrow final amount
+      // Update escrow to mark as fully settled
       escrow.amount = 0;
       await escrow.save({ session });
 
-      // Update project status
+      // Update project and agreement status
       project.status = "completed";
       await project.save({ session });
 
       agreement.status = "completed";
       await agreement.save({ session });
 
-
-
-      // Create freelancer escrow record
-      const freelancerEscrow = new FreelancerEscrowSchema({
-        projectId: project_id,
-        freelancerId: freelancer_id,
-        amount: freelancerAmount,
-      });
-      await freelancerEscrow.save({ session });
-
-      // Record transactions
-      await Transaction.create(
-        [
-          {
-            escrowId: freelancerEscrow._id,
-            type: "received",
-            amount: freelancerAmount,
-            status: "completed",
-            description: `Payment received for project: ${ongoingProject.title || "Unnamed Project"}`,
-          },
-          {
-            escrowId: escrow._id,
-            type: "release",
-            amount: freelancerAmount,
-            status: "settled",
-            description: `Payment released to freelancer: ${ongoingProject.freelancer || "Unknown"}`,
-          },
-        ],
-        { session }
+      // ── GLOBAL WALLET: release escrow to freelancer balance ──
+      await walletHelper.releaseEscrow(
+        clientId,
+        freelancer_id,
+        freelancerAmount,
+        escrow._id,
+        project_id,
+        `Payment released for project: ${project.title}`,
+        session
       );
-
 
       await session.commitTransaction();
 
@@ -1058,42 +1034,20 @@ router.post(
 
       session.startTransaction();
 
-      // ================ ATOMIC BALANCE CHECK AND DEDUCTION ================
-      
-      // Get all escrows with locking
-      const escrows = await FreelancerEscrowSchema.find({
-        freelancerId: freelancerId,
-        status: "paid",
-      }).session(session);
+      // ── GLOBAL WALLET: check available balance ──
+      const wallet = await Wallet.findOne({ userId: freelancerId }).session(session);
+      const availableBalance = wallet ? wallet.balance : 0;
 
-      const totalBalance = escrows.reduce((sum, e) => sum + e.amount, 0);
-
-      if (totalBalance < amount) {
+      if (availableBalance < amount) {
         await session.abortTransaction();
         return res.status(400).json({
           message: "Insufficient balance.",
-          available: totalBalance,
+          available: availableBalance,
           requested: amount,
         });
       }
 
-      // Deduct from escrows atomically
-      let remainingAmount = amount;
-      for (const escrow of escrows) {
-        if (remainingAmount <= 0) break;
-
-        if (escrow.amount <= remainingAmount) {
-          remainingAmount -= escrow.amount;
-          escrow.amount = 0;
-          escrow.status = "withdraw";
-        } else {
-          escrow.amount -= remainingAmount;
-          remainingAmount = 0;
-        }
-        await escrow.save({ session });
-      }
-
-      // Create admin withdrawal request
+      // Create admin withdrawal request record first (get its ID for the WalletTransaction reference)
       const adminWithdraw = await AdminWithdrawSchema.create(
         [
           {
@@ -1112,19 +1066,14 @@ router.post(
         { session }
       );
 
-      // Record transaction
-      await Transaction.create(
-        [
-          {
-            escrowId: adminWithdraw[0]._id,
-            freelancerId,
-            type: "withdrawal",
-            amount,
-            status: "pending",
-            description: `Withdrawal request of ₹${amount}`,
-          },
-        ],
-        { session }
+      // ── GLOBAL WALLET: debit available balance, WalletTransaction logged inside ──
+      await walletHelper.debitWallet(
+        freelancerId,
+        amount,
+        adminWithdraw[0]._id,
+        "AdminWithdraw",
+        `Withdrawal request of ₹${amount}`,
+        session
       );
 
       await session.commitTransaction();
@@ -1141,6 +1090,12 @@ router.post(
     } catch (error) {
       await session.abortTransaction();
       console.error("Withdraw Error:", error);
+
+      // Pass through validation errors from walletHelper cleanly
+      if (error.message && (error.message.includes("blocked") || error.message.includes("Insufficient"))) {
+        return res.status(400).json({ message: error.message });
+      }
+
       return res.status(500).json({ message: "Internal server error." });
     } finally {
       session.endSession();

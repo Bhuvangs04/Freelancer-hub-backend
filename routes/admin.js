@@ -1,6 +1,7 @@
 const express = require("express");
 const { verifyToken, authorize } = require("../middleware/Auth");
 const router = express.Router();
+const mongoose = require("mongoose");
 
 // Models
 const User = require("../models/User");
@@ -16,6 +17,9 @@ const Content = require("../models/Content");
 const Category = require("../models/Category");
 const AdminActivityLog = require("../models/AdminActivityLog");
 const Action = require("../models/ActionSchema");
+const Wallet = require("../models/Wallet");
+const WalletTransaction = require("../models/WalletTransaction");
+const walletHelper = require("../utils/walletHelper");
 
 // Utils
 const { uploadFile } = require("../utils/S3");
@@ -155,12 +159,32 @@ router.get(
           .select("-password -__v")
           .sort({ createdAt: -1 })
           .skip(skip)
-          .limit(parseInt(limit)),
+          .limit(parseInt(limit))
+          .lean(),
         User.countDocuments(filter),
       ]);
 
+      // Fetch wallet info for the returned users to get exactly `withdrawalsBlocked`
+      const userIds = users.map((u) => u._id);
+      const wallets = await Wallet.find({ userId: { $in: userIds } })
+        .select("userId withdrawalsBlocked withdrawalBlockedReason")
+        .lean();
+
+      const walletMap = {};
+      wallets.forEach((w) => {
+        walletMap[w.userId.toString()] = w;
+      });
+
+      const usersWithWallet = users.map((u) => ({
+        ...u,
+        wallet: walletMap[u._id.toString()] || {
+          withdrawalsBlocked: false,
+          withdrawalBlockedReason: null,
+        },
+      }));
+
       res.json({
-        users,
+        users: usersWithWallet,
         pagination: {
           total,
           page: parseInt(page),
@@ -708,6 +732,114 @@ router.put(
     } catch (err) {
       console.error("Block escrow error:", err);
       res.status(500).json({ message: "Error blocking escrow" });
+    }
+  }
+);
+
+// ============================================================================
+// 4b. WALLET MANAGEMENT (ADMIN)
+// ============================================================================
+
+/**
+ * GET /admin/users/:userId/wallet
+ * View any user's global wallet + last 50 transactions (admin only)
+ */
+router.get(
+  "/users/:userId/wallet",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const wallet = await Wallet.findOne({ userId }).populate("userId", "username email role");
+      const transactions = await WalletTransaction.find({ userId })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .select("type amount balanceAfter escrowBalanceAfter description status createdAt performedBy")
+        .populate("performedBy", "username");
+
+      res.json({
+        wallet: wallet || { balance: 0, escrowBalance: 0 },
+        transactions,
+      });
+    } catch (err) {
+      console.error("Get user wallet error:", err);
+      res.status(500).json({ message: "Error fetching wallet" });
+    }
+  }
+);
+
+/**
+ * POST /admin/users/:userId/wallet/adjust
+ * Admin manually credit (+) or debit (-) a user's wallet balance.
+ * Body: { delta: Number (positive = credit, negative = debit), reason: String }
+ */
+router.post(
+  "/users/:userId/wallet/adjust",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    const mongoose = require("mongoose");
+    const session = await mongoose.startSession();
+    try {
+      const adminId = req.user.userId;
+      const { userId } = req.params;
+      const { delta, reason } = req.body;
+
+      if (typeof delta !== "number" || delta === 0) {
+        return res.status(400).json({ message: "delta must be a non-zero number" });
+      }
+      if (!reason || reason.trim().length < 5) {
+        return res.status(400).json({ message: "reason is required (min 5 characters)" });
+      }
+
+      const user = await User.findById(userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      // Safety: block negative debit that would push balance below 0
+      if (delta < 0) {
+        const wallet = await Wallet.findOne({ userId });
+        const available = wallet ? wallet.balance : 0;
+        if (available + delta < 0) {
+          return res.status(400).json({
+            message: `Debit of ${Math.abs(delta)} would exceed available balance of ${available}`,
+          });
+        }
+      }
+
+      session.startTransaction();
+
+      const updatedWallet = await walletHelper.adminAdjustWallet(
+        userId,
+        delta,
+        adminId,
+        `[ADMIN] ${reason.trim()}`,
+        session
+      );
+
+      await session.commitTransaction();
+
+      await logAdminActivity(adminId, "WALLET_ADJUST", {
+        targetType: "user",
+        targetId: userId,
+        reason: reason.trim(),
+        metadata: { delta, newBalance: updatedWallet.balance },
+        ipAddress: getClientIp(req),
+      });
+
+      res.json({
+        message: `Wallet ${delta > 0 ? "credited" : "debited"} by ₹${Math.abs(delta)}`,
+        wallet: {
+          balance: updatedWallet.balance,
+          escrowBalance: updatedWallet.escrowBalance,
+        },
+      });
+    } catch (err) {
+      await session.abortTransaction();
+      console.error("Wallet adjust error:", err);
+      res.status(500).json({ message: "Error adjusting wallet", error: err.message });
+    } finally {
+      session.endSession();
     }
   }
 );
@@ -1319,6 +1451,341 @@ router.get(
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Error fetching disputes" });
+    }
+  }
+);
+
+// ============================================================================
+// 10. WITHDRAWAL PAYOUT MANAGEMENT (ADMIN)
+// ============================================================================
+
+/**
+ * GET /admin/withdrawals
+ * List all pending withdrawal requests
+ */
+router.get(
+  "/withdrawals",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { status = "pending", page = 1, limit = 30 } = req.query;
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+
+      const [requests, total] = await Promise.all([
+        AdminWithdrawSchema.find({ status })
+          .populate("freelancerId", "username email")
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit)),
+        AdminWithdrawSchema.countDocuments({ status }),
+      ]);
+
+      res.json({
+        requests,
+        pagination: {
+          total,
+          page: parseInt(page),
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      });
+    } catch (err) {
+      console.error("Get withdrawals error:", err);
+      res.status(500).json({ message: "Error fetching withdrawal requests" });
+    }
+  }
+);
+
+/**
+ * POST /admin/withdrawals/:id/approve
+ * Mark a pending withdrawal as approved (payment processed outside the system)
+ */
+router.post(
+  "/withdrawals/:id/approve",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { note } = req.body;
+
+      const withdrawal = await AdminWithdrawSchema.findById(id);
+      if (!withdrawal) return res.status(404).json({ message: "Withdrawal not found" });
+      if (withdrawal.status !== "pending")
+        return res.status(409).json({ message: `Withdrawal is already ${withdrawal.status}` });
+
+      withdrawal.status = "approved";
+      if (note) withdrawal.description = `${withdrawal.description || ""} | Admin note: ${note}`;
+      await withdrawal.save();
+
+      // Mark the corresponding WalletTransaction as completed
+      await WalletTransaction.findOneAndUpdate(
+        {
+          userId: withdrawal.freelancerId,
+          type: "withdrawal",
+          status: "pending",
+          referenceId: withdrawal._id,
+        },
+        { status: "completed" }
+      );
+
+      await logAdminActivity(req.user.userId, "WITHDRAWAL_APPROVE", {
+        targetType: "withdrawal",
+        targetId: withdrawal._id,
+        reason: note || "Admin approved",
+        metadata: { amount: withdrawal.amount, freelancerId: withdrawal.freelancerId },
+        ipAddress: getClientIp(req),
+      });
+
+      res.json({ message: "Withdrawal approved", withdrawal });
+    } catch (err) {
+      console.error("Approve withdrawal error:", err);
+      res.status(500).json({ message: "Error approving withdrawal" });
+    }
+  }
+);
+
+/**
+ * POST /admin/withdrawals/:id/reject
+ * Reject a pending withdrawal AND atomically reverse the wallet debit.
+ * The freelancer's balance is credited back; a withdrawal_reversal WalletTransaction is created.
+ */
+router.post(
+  "/withdrawals/:id/reject",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    const mongoose = require("mongoose");
+    const session = await mongoose.startSession();
+    try {
+      const { id } = req.params;
+      const { reason } = req.body;
+
+      if (!reason || reason.trim().length < 5) {
+        return res.status(400).json({ message: "Rejection reason is required (min 5 characters)" });
+      }
+
+      const withdrawal = await AdminWithdrawSchema.findById(id);
+      if (!withdrawal) return res.status(404).json({ message: "Withdrawal not found" });
+      if (withdrawal.status !== "pending") {
+        return res.status(409).json({ message: `Cannot reject: withdrawal is already ${withdrawal.status}` });
+      }
+
+      session.startTransaction();
+
+      // Mark withdrawal as rejected
+      withdrawal.status = "rejected";
+      withdrawal.description = `${withdrawal.description || ""} | Rejected: ${reason.trim()}`;
+      await withdrawal.save({ session });
+
+      // ── REVERSE the wallet debit atomically ──
+      await walletHelper.reverseWithdrawal(
+        withdrawal.freelancerId,
+        withdrawal.amount,
+        withdrawal._id,
+        session
+      );
+
+      await session.commitTransaction();
+
+      await logAdminActivity(req.user.userId, "WITHDRAWAL_REJECT", {
+        targetType: "withdrawal",
+        targetId: withdrawal._id,
+        reason: reason.trim(),
+        metadata: { amount: withdrawal.amount, freelancerId: withdrawal.freelancerId },
+        ipAddress: getClientIp(req),
+      });
+
+      res.json({
+        message: `Withdrawal of ₹${withdrawal.amount} rejected. Funds returned to freelancer's wallet.`,
+        withdrawal,
+      });
+    } catch (err) {
+      await session.abortTransaction();
+      console.error("Reject withdrawal error:", err);
+      res.status(500).json({ message: "Error rejecting withdrawal", error: err.message });
+    } finally {
+      session.endSession();
+    }
+  }
+);
+
+// ============================================================================
+// 11. WALLET FREEZE CONTROLS (ADMIN)
+// ============================================================================
+
+/**
+ * POST /admin/users/:userId/wallet/freeze
+ * Block a user from making any withdraw debits.
+ * Body: { reason: String }
+ */
+router.post(
+  "/users/:userId/wallet/freeze",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const { reason } = req.body;
+      const adminId = req.user.userId;
+
+      if (!reason || reason.trim().length < 5) {
+        return res.status(400).json({ message: "Freeze reason is required (min 5 characters)" });
+      }
+
+      const wallet = await Wallet.findOneAndUpdate(
+        { userId },
+        {
+          withdrawalsBlocked: true,
+          withdrawalBlockedReason: reason.trim(),
+          withdrawalBlockedAt: new Date(),
+          withdrawalBlockedBy: adminId,
+        },
+        { new: true, upsert: true }
+      );
+
+      await logAdminActivity(adminId, "WALLET_FREEZE", {
+        targetType: "user",
+        targetId: userId,
+        reason: reason.trim(),
+        ipAddress: getClientIp(req),
+      });
+
+      res.json({
+        message: "Withdrawals have been frozen for this user.",
+        wallet: {
+          userId: wallet.userId,
+          withdrawalsBlocked: wallet.withdrawalsBlocked,
+          withdrawalBlockedReason: wallet.withdrawalBlockedReason,
+          withdrawalBlockedAt: wallet.withdrawalBlockedAt,
+        },
+      });
+    } catch (err) {
+      console.error("Freeze wallet error:", err);
+      res.status(500).json({ message: "Error freezing wallet" });
+    }
+  }
+);
+
+/**
+ * POST /admin/users/:userId/wallet/unfreeze
+ * Unblock a previously frozen user's withdrawals.
+ */
+router.post(
+  "/users/:userId/wallet/unfreeze",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const adminId = req.user.userId;
+
+      const wallet = await Wallet.findOneAndUpdate(
+        { userId },
+        {
+          withdrawalsBlocked: false,
+          withdrawalBlockedReason: null,
+          withdrawalBlockedAt: null,
+          withdrawalBlockedBy: null,
+        },
+        { new: true }
+      );
+
+      if (!wallet) return res.status(404).json({ message: "Wallet not found for this user" });
+
+      await logAdminActivity(adminId, "WALLET_UNFREEZE", {
+        targetType: "user",
+        targetId: userId,
+        ipAddress: getClientIp(req),
+      });
+
+      res.json({ message: "Withdrawals have been unfrozen for this user." });
+    } catch (err) {
+      console.error("Unfreeze wallet error:", err);
+      res.status(500).json({ message: "Error unfreezing wallet" });
+    }
+  }
+);
+// ============================================================================
+// 12. PAYMENT CLAWBACK (ADMIN ONLY)
+// ============================================================================
+
+/**
+ * POST /admin/projects/:projectId/clawback
+ * Reverse a released payment: debit the freelancer and credit the client.
+ * Use when a frozen freelancer received payment that must be recovered.
+ *
+ * Body:
+ *   amount  (Number, required) – amount to claw back in ₹
+ *   reason  (String, required) – audit reason, min 10 chars
+ */
+router.post(
+  "/projects/:projectId/clawback",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    const session = await mongoose.startSession();
+    try {
+      const adminId = req.user.userId;
+      const { projectId } = req.params;
+      const { amount, reason } = req.body;
+
+      if (!amount || typeof amount !== "number" || amount <= 0) {
+        return res.status(400).json({ message: "A positive numeric amount is required" });
+      }
+      if (!reason || reason.trim().length < 10) {
+        return res.status(400).json({ message: "Reason is required (min 10 characters)" });
+      }
+      if (!mongoose.Types.ObjectId.isValid(projectId)) {
+        return res.status(400).json({ message: "Invalid project ID" });
+      }
+
+      const project = await Project.findById(projectId)
+        .populate("clientId", "username")
+        .populate("freelancerId", "username");
+
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+      if (!project.freelancerId) {
+        return res.status(400).json({ message: "No freelancer assigned to this project" });
+      }
+
+      session.startTransaction();
+
+      const { freelancerWallet, clientWallet } = await walletHelper.adminClawback(
+        project.freelancerId._id,
+        project.clientId._id,
+        amount,
+        project._id,
+        adminId,
+        `Admin clawback – ${reason.trim()}`,
+        session
+      );
+
+      await logAdminActivity(adminId, "PAYMENT_CLAWBACK", {
+        targetType: "project",
+        targetId: projectId,
+        amount,
+        reason: reason.trim(),
+        freelancerId: project.freelancerId._id,
+        clientId: project.clientId._id,
+        ipAddress: getClientIp(req),
+      });
+
+      await session.commitTransaction();
+
+      res.json({
+        message: `₹${amount} clawed back from ${project.freelancerId.username} and returned to ${project.clientId.username}.`,
+        freelancerNewBalance: freelancerWallet.balance,
+        clientNewBalance: clientWallet.balance,
+      });
+    } catch (err) {
+      await session.abortTransaction();
+      console.error("Clawback error:", err);
+      res.status(400).json({ message: err.message || "Error processing clawback" });
+    } finally {
+      session.endSession();
     }
   }
 );
