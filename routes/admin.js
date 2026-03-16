@@ -1790,4 +1790,207 @@ router.post(
   }
 );
 
+// ============================================================================
+// AI API KEY MANAGEMENT
+// ============================================================================
+
+const AiApiKey = require("../models/AiApiKey");
+const AiRequest = require("../models/AiRequest");
+
+// Create a new AI API key
+router.post(
+  "/ai-keys",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { label, requestLimit } = req.body;
+      if (!label || !label.trim()) {
+        return res.status(400).json({ message: "Label is required" });
+      }
+
+      const apiKey = await AiApiKey.create({
+        label: label.trim(),
+        requestLimit: parseInt(requestLimit) || 0,
+        createdBy: req.user.userId,
+      });
+
+      await logAdminActivity(req.user.userId, "AI_KEY_CREATE", {
+        targetType: "ai_api_key",
+        targetId: apiKey._id,
+        metadata: { label: apiKey.label, requestLimit: apiKey.requestLimit },
+        ipAddress: getClientIp(req),
+      });
+
+      // Return the full key only once during creation
+      res.status(201).json({
+        message: "API key created successfully",
+        apiKey: {
+          _id: apiKey._id,
+          key: apiKey.key, // Only returned at creation time
+          label: apiKey.label,
+          status: apiKey.status,
+          requestLimit: apiKey.requestLimit,
+          usageCount: apiKey.usageCount,
+          createdAt: apiKey.createdAt,
+        },
+      });
+    } catch (err) {
+      console.error("Create AI key error:", err);
+      res.status(500).json({ message: "Error creating API key" });
+    }
+  }
+);
+
+// List all AI API keys with usage stats
+router.get(
+  "/ai-keys",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const keys = await AiApiKey.find()
+        .populate("createdBy", "username")
+        .sort({ createdAt: -1 })
+        .lean();
+
+      // Get recent request counts per key (last 24h)
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      const keysWithStats = await Promise.all(
+        keys.map(async (k) => {
+          const recentRequests = await AiRequest.countDocuments({
+            createdAt: { $gte: oneDayAgo },
+            // Match by the key's actual value in the request tracking
+          }).catch(() => 0);
+
+          return {
+            ...k,
+            // Mask the key for display (show first 12 chars + last 4)
+            key: k.key.substring(0, 12) + "..." + k.key.slice(-4),
+            recentRequests,
+          };
+        })
+      );
+
+      // Aggregate stats
+      const totalKeys = keys.length;
+      const activeKeys = keys.filter((k) => k.status === "active").length;
+      const blockedKeys = keys.filter((k) => k.status === "blocked").length;
+      const totalUsage = keys.reduce((sum, k) => sum + k.usageCount, 0);
+
+      res.json({
+        stats: { totalKeys, activeKeys, blockedKeys, totalUsage },
+        keys: keysWithStats,
+      });
+    } catch (err) {
+      console.error("List AI keys error:", err);
+      res.status(500).json({ message: "Error fetching API keys" });
+    }
+  }
+);
+
+// Block an AI API key
+router.put(
+  "/ai-keys/:id/block",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { reason } = req.body;
+      if (!reason || !reason.trim()) {
+        return res.status(400).json({ message: "Reason is required" });
+      }
+
+      const apiKey = await AiApiKey.findById(req.params.id);
+      if (!apiKey) return res.status(404).json({ message: "API key not found" });
+      if (apiKey.status === "blocked") {
+        return res.status(400).json({ message: "Key is already blocked" });
+      }
+      if (apiKey.status === "revoked") {
+        return res.status(400).json({ message: "Key has been revoked" });
+      }
+
+      apiKey.status = "blocked";
+      apiKey.blockedReason = reason.trim();
+      apiKey.blockedAt = new Date();
+      await apiKey.save();
+
+      await logAdminActivity(req.user.userId, "AI_KEY_BLOCK", {
+        targetType: "ai_api_key",
+        targetId: apiKey._id,
+        reason: reason.trim(),
+        metadata: { label: apiKey.label },
+        ipAddress: getClientIp(req),
+      });
+
+      res.json({ message: "API key blocked", apiKey });
+    } catch (err) {
+      console.error("Block AI key error:", err);
+      res.status(500).json({ message: "Error blocking API key" });
+    }
+  }
+);
+
+// Unblock an AI API key
+router.put(
+  "/ai-keys/:id/unblock",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const apiKey = await AiApiKey.findById(req.params.id);
+      if (!apiKey) return res.status(404).json({ message: "API key not found" });
+      if (apiKey.status !== "blocked") {
+        return res.status(400).json({ message: "Key is not blocked" });
+      }
+
+      apiKey.status = "active";
+      apiKey.blockedReason = null;
+      apiKey.blockedAt = null;
+      await apiKey.save();
+
+      await logAdminActivity(req.user.userId, "AI_KEY_UNBLOCK", {
+        targetType: "ai_api_key",
+        targetId: apiKey._id,
+        metadata: { label: apiKey.label },
+        ipAddress: getClientIp(req),
+      });
+
+      res.json({ message: "API key unblocked", apiKey });
+    } catch (err) {
+      console.error("Unblock AI key error:", err);
+      res.status(500).json({ message: "Error unblocking API key" });
+    }
+  }
+);
+
+// Delete (revoke) an AI API key
+router.delete(
+  "/ai-keys/:id",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const apiKey = await AiApiKey.findById(req.params.id);
+      if (!apiKey) return res.status(404).json({ message: "API key not found" });
+
+      const label = apiKey.label;
+      await AiApiKey.findByIdAndDelete(req.params.id);
+
+      await logAdminActivity(req.user.userId, "AI_KEY_DELETE", {
+        targetType: "ai_api_key",
+        targetId: req.params.id,
+        metadata: { label },
+        ipAddress: getClientIp(req),
+      });
+
+      res.json({ message: "API key deleted" });
+    } catch (err) {
+      console.error("Delete AI key error:", err);
+      res.status(500).json({ message: "Error deleting API key" });
+    }
+  }
+);
+
 module.exports = router;

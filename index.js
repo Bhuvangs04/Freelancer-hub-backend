@@ -42,6 +42,7 @@ const dispute = require("./routes/dispute");
 const skills = require("./routes/skills");
 const finance = require("./routes/finance");
 const metrics = require("./routes/metrics");
+const aiGateway = require("./routes/aiGateway");
 
 // ============================================================================
 // SECURITY MIDDLEWARE
@@ -161,6 +162,9 @@ app.use("/api/vi/dispute", dispute);
 // Skill & Finance Features
 app.use("/api/vi/skills", skills);
 app.use("/api/vi/finance", finance);
+
+// AI Gateway (server-to-server, API key auth)
+app.use("/api/vi/ai-gateway", aiGateway);
 
 // Admin Panel
 app.use("/admin", admin);
