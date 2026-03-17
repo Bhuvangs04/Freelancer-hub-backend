@@ -382,6 +382,108 @@ async function reverseWithdrawal(userId, amount, withdrawalId, session) {
   return wallet;
 }
 
+/**
+ * Charge early-delivery bonus from client's available balance → freelancer balance.
+ * This NEVER touches escrow. If the client's wallet balance is insufficient, the
+ * freelancer still gets paid but a "pending" bonus_charge transaction is recorded
+ * so admin can track the deficit and the client must top up later.
+ */
+async function chargeBonusFromWallet(
+  clientId, freelancerId, bonusAmount, projectId, milestoneId, description, session
+) {
+  if (bonusAmount <= 0) return null;
+
+  const clientWallet = await Wallet.findOne({ userId: clientId }).session(session);
+  if (!clientWallet) {
+    throw new Error("Client wallet not found");
+  }
+
+  const hasSufficientBalance = clientWallet.balance >= bonusAmount;
+
+  if (hasSufficientBalance) {
+    // Normal path: deduct from client balance
+    clientWallet.balance -= bonusAmount;
+    await clientWallet.save({ session });
+
+    // Credit freelancer
+    const freelancerWallet = await Wallet.findOneAndUpdate(
+      { userId: freelancerId },
+      { $inc: { balance: bonusAmount } },
+      { new: true, upsert: true, session }
+    );
+
+    // Client debit transaction
+    await _saveTransaction({
+      walletId: clientWallet._id,
+      userId: clientId,
+      type: "bonus_charge",
+      amount: -bonusAmount,
+      balanceAfter: clientWallet.balance,
+      escrowBalanceAfter: clientWallet.escrowBalance,
+      status: "completed",
+      referenceId: milestoneId,
+      referenceModel: "Milestone",
+      description: `[BONUS DEBIT] ${description}`,
+    }, session);
+
+    // Freelancer credit transaction
+    await _saveTransaction({
+      walletId: freelancerWallet._id,
+      userId: freelancerId,
+      type: "bonus_charge",
+      amount: bonusAmount,
+      balanceAfter: freelancerWallet.balance,
+      escrowBalanceAfter: freelancerWallet.escrowBalance,
+      status: "completed",
+      referenceId: milestoneId,
+      referenceModel: "Milestone",
+      description: `[BONUS CREDIT] ${description}`,
+    }, session);
+
+    console.log(`[BONUS] ₹${bonusAmount} charged from client ${clientId} → freelancer ${freelancerId}`);
+    return { status: "completed", bonusAmount };
+  } else {
+    // Deficit path: client doesn't have enough balance
+    // Still credit freelancer (platform covers it temporarily)
+    const freelancerWallet = await Wallet.findOneAndUpdate(
+      { userId: freelancerId },
+      { $inc: { balance: bonusAmount } },
+      { new: true, upsert: true, session }
+    );
+
+    // Record pending charge on client (admin must follow up)
+    await _saveTransaction({
+      walletId: clientWallet._id,
+      userId: clientId,
+      type: "bonus_charge",
+      amount: -bonusAmount,
+      balanceAfter: clientWallet.balance,
+      escrowBalanceAfter: clientWallet.escrowBalance,
+      status: "pending",   // ← PENDING — client needs to top up
+      referenceId: milestoneId,
+      referenceModel: "Milestone",
+      description: `[BONUS DEFICIT] ${description} — client balance insufficient, deficit: ₹${bonusAmount}`,
+    }, session);
+
+    // Freelancer still gets paid
+    await _saveTransaction({
+      walletId: freelancerWallet._id,
+      userId: freelancerId,
+      type: "bonus_charge",
+      amount: bonusAmount,
+      balanceAfter: freelancerWallet.balance,
+      escrowBalanceAfter: freelancerWallet.escrowBalance,
+      status: "completed",
+      referenceId: milestoneId,
+      referenceModel: "Milestone",
+      description: `[BONUS CREDIT] ${description}`,
+    }, session);
+
+    console.log(`[BONUS DEFICIT] ₹${bonusAmount} deficit for client ${clientId} — freelancer ${freelancerId} paid by platform`);
+    return { status: "pending_deficit", bonusAmount, deficit: bonusAmount - clientWallet.balance };
+  }
+}
+
 module.exports = {
   creditWallet,
   holdEscrow,
@@ -392,4 +494,5 @@ module.exports = {
   adminClawback,
   reverseWithdrawal,
   getWallet,
+  chargeBonusFromWallet,
 };

@@ -196,7 +196,7 @@ router.post(
     
     try {
       const clientId = req.user.userId;
-      const { projectId, bidId } = req.body;
+      const { projectId, bidId, paymentType } = req.body;
 
       // Validate inputs
       if (!projectId || !isValidObjectId(projectId)) {
@@ -270,6 +270,7 @@ router.post(
         deadline: project.deadline,
         deliverables: project.description,
         status: "draft",
+        paymentType: paymentType === "milestone" ? "milestone" : "project_completion",
       });
 
       await agreement.save({ session });
@@ -466,7 +467,7 @@ router.put(
     try {
       const clientId = req.user.userId;
       const { id } = req.params;
-      const { deliverables, deadline, agreedAmount, projectDescription } = req.body;
+      const { deliverables, deadline, agreedAmount, projectDescription, paymentType } = req.body;
 
       if (!isValidObjectId(id)) {
         return res.status(400).json({ message: "Invalid agreement ID" });
@@ -496,6 +497,7 @@ router.put(
       if (deadline !== undefined) updates.deadline = new Date(deadline);
       if (agreedAmount !== undefined) updates.agreedAmount = agreedAmount;
       if (projectDescription !== undefined) updates.projectDescription = projectDescription;
+      if (paymentType !== undefined) updates.paymentType = paymentType;
 
       await agreement.updateTerms(updates);
 

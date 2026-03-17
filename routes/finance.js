@@ -571,4 +571,291 @@ router.get(
   }
 );
 
+// ============================================================================
+// ADMIN FINANCIAL TRACKING
+// ============================================================================
+
+/**
+ * GET /finance/admin/bonus-penalty-summary
+ * Admin view: Track all bonus charges, penalty refunds, and deficits
+ */
+router.get(
+  "/admin/bonus-penalty-summary",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      // 1. Fetch all released milestones that have a bonus or penalty
+      const completedMilestones = await Milestone.find({
+        status: "released",
+        $or: [{ bonusAmount: { $gt: 0 } }, { penaltyAmount: { $gt: 0 } }]
+      });
+
+      // 2. Calculate totals from Milestones (this ensures historical accuracy)
+      const totalBonusesPaid = completedMilestones.reduce((sum, m) => sum + (m.bonusAmount || 0), 0);
+      const totalPenaltiesApplied = completedMilestones.reduce((sum, m) => sum + (m.penaltyAmount || 0), 0);
+
+      // 3. Track Pending Deficits via WalletTransactions (active debts from new system)
+      const pendingDeficitsTx = await WalletTransaction.find({
+        type: "bonus_charge",
+        status: "pending",
+        amount: { $lt: 0 }
+      })
+        .populate({ path: "userId", model: "User", select: "username email" })
+        .populate({ path: "referenceId", model: "Milestone", select: "title" })
+        .sort({ createdAt: -1 });
+
+      const mappedDeficits = pendingDeficitsTx.map((t) => ({
+        _id: t._id.toString(),
+        clientName: t.userId?.username,
+        clientEmail: t.userId?.email,
+        amount: Math.abs(t.amount),
+        milestoneTitle: t.referenceId?.title || "Unknown",
+        description: t.description,
+        createdAt: t.createdAt,
+      }));
+
+      // 3b. Calculate Legacy Deficits
+      // Find completed milestones with bonuses that DO NOT have a bonus_charge transaction
+      const legacyBonuses = await Milestone.find({
+        status: "released",
+        bonusAmount: { $gt: 0 }
+      }).populate({ path: "clientId", model: "User", select: "username email" });
+
+      for (const m of legacyBonuses) {
+        // Did we charge a bonus for this milestone?
+        const hasCharge = await WalletTransaction.exists({
+          referenceId: m._id,
+          type: "bonus_charge"
+        });
+
+        if (!hasCharge) {
+          // This is a legacy bonus. Did the client actually pay for it out of wallet?
+          // Since old logic pulled from escrow (and if escrow was fully drained, it just bypassed wallet balance),
+          // the platform technically paid this bonus. We register it as a legacy deficit.
+          mappedDeficits.push({
+            _id: `legacy-${m._id.toString()}`,
+            clientName: m.clientId?.username,
+            clientEmail: m.clientId?.email,
+            amount: m.bonusAmount,
+            milestoneTitle: m.title,
+            description: `[LEGACY DEFICIT] Early delivery bonus for '${m.title}'. Platform covered the bonus (₹${m.bonusAmount}) because it was released before the split-payment system was installed.`,
+            createdAt: m.releasedAt || m.updatedAt,
+          });
+        }
+      }
+
+      // Sort deficits by date
+      mappedDeficits.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+      const totalDeficitAmount = mappedDeficits.reduce((sum, d) => sum + d.amount, 0);
+
+      // 4. Fetch Recent Bonuses from Milestones
+      const recentBonusMilestones = await Milestone.find({
+        status: "released",
+        bonusAmount: { $gt: 0 }
+      })
+        .populate({ path: "freelancerId", model: "User", select: "username role" })
+        .sort({ releasedAt: -1, updatedAt: -1 })
+        .limit(20);
+
+      res.json({
+        summary: {
+          totalBonusesPaid,
+          totalPenaltiesApplied,
+          totalDeficitAmount,
+          pendingDeficitCount: mappedDeficits.length,
+          netImpact: totalBonusesPaid - totalPenaltiesApplied,
+        },
+        pendingDeficits: mappedDeficits,
+        recentBonuses: recentBonusMilestones.map((m) => ({
+          _id: m._id,
+          userName: m.freelancerId?.username,
+          role: m.freelancerId?.role,
+          amount: m.bonusAmount,
+          milestoneTitle: m.title,
+          createdAt: m.releasedAt || m.updatedAt,
+        })),
+      });
+    } catch (err) {
+      console.error("Admin Bonus Summary Error:", err);
+      res.status(500).json({ message: "Error fetching bonus summary" });
+    }
+  }
+);
+
+/**
+ * POST /finance/admin/deficits/:deficitId/remind
+ * Send an email reminder to a client about a pending deficit.
+ */
+router.post(
+  "/admin/deficits/:deficitId/remind",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { deficitId } = req.params;
+      const sendEmail = require("../utils/sendEmail");
+
+      let clientEmail, clientName, amount, milestoneTitle;
+      let isLegacy = deficitId.startsWith("legacy-");
+
+      if (isLegacy) {
+        const milestoneId = deficitId.replace("legacy-", "");
+        const milestone = await Milestone.findById(milestoneId).populate("clientId");
+        if (!milestone) return res.status(404).json({ message: "Milestone not found for legacy deficit" });
+        
+        clientEmail = milestone.clientId.email;
+        clientName = milestone.clientId.username;
+        amount = milestone.bonusAmount;
+        milestoneTitle = milestone.title;
+      } else {
+        const transaction = await WalletTransaction.findById(deficitId).populate("userId referenceId");
+        if (!transaction) return res.status(404).json({ message: "Deficit transaction not found" });
+        
+        clientEmail = transaction.userId.email;
+        clientName = transaction.userId.username;
+        amount = Math.abs(transaction.amount);
+        milestoneTitle = transaction.referenceId ? transaction.referenceId.title : "Unknown Milestone";
+      }
+
+      if (!clientEmail) {
+        return res.status(400).json({ message: "Client email not found" });
+      }
+
+      const subject = "Action Required: Negative Wallet Balance due to Early Delivery Bonus";
+      const htmlContent = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+          <h2 style="color: #6366f1;">Wallet Deficit Notice</h2>
+          <p>Hello ${clientName},</p>
+          <p>This is a reminder regarding a pending deficit on your Freelancer Hub account.</p>
+          <p>You recently awarded an early-delivery bonus for the milestone <strong>"${milestoneTitle}"</strong>. However, your platform wallet did not have sufficient funds to cover the complete bonus amount.</p>
+          <p style="font-size: 1.1em; padding: 15px; background-color: #fef2f2; border-left: 4px solid #ef4444; margin: 20px 0;">
+            <strong>Amount Due: ₹${amount.toLocaleString("en-IN")}</strong>
+          </p>
+          <p>The platform has temporarily covered this cost to ensure the freelancer was paid on time. Please log in to your account and <strong>Top Up your Wallet</strong> as soon as possible to clear this negative balance.</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="https://freelancerhub-five.vercel.app/login" style="background-color: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">Log In to Top Up</a>
+          </div>
+          <p>If you have any questions, please contact our support team.</p>
+          <p>Best regards,<br>The Freelancer Hub Team</p>
+        </div>
+      `;
+
+      await sendEmail(clientEmail, subject, htmlContent);
+
+      res.json({ message: "Reminder email sent successfully to the client." });
+
+    } catch (err) {
+      console.error("Email Reminder Error:", err);
+      res.status(500).json({ message: "Error sending reminder email" });
+    }
+  }
+);
+
+/**
+ * POST /finance/admin/deficits/:deficitId/resolve
+ * Resolve a pending deficit by charging the client's wallet.
+ * Fails if the client's available balance is insufficient.
+ */
+router.post(
+  "/admin/deficits/:deficitId/resolve",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    const mongoose = require("mongoose");
+    const session = await mongoose.startSession();
+    
+    try {
+      const { deficitId } = req.params;
+      session.startTransaction();
+
+      let clientWallet, amount, description;
+      let isLegacy = deficitId.startsWith("legacy-");
+      let transactionToUpdate = null;
+      let milestoneId = null;
+
+      if (isLegacy) {
+        // Resolve legacy deficit
+        milestoneId = deficitId.replace("legacy-", "");
+        const milestone = await Milestone.findById(milestoneId).session(session);
+        if (!milestone) throw new Error("Milestone not found for legacy deficit");
+        
+        // Ensure it hasn't already been resolved
+        const existingTx = await WalletTransaction.findOne({
+          referenceId: milestone._id,
+          type: "bonus_charge",
+          status: "completed",
+          amount: -milestone.bonusAmount
+        }).session(session);
+
+        if (existingTx) throw new Error("This legacy deficit is already resolved");
+
+        clientWallet = await Wallet.findOne({ userId: milestone.clientId }).session(session);
+        amount = milestone.bonusAmount;
+        description = `[DEFICIT RESOLVED] Recovered legacy bonus deficit for milestone: '${milestone.title}'`;
+
+      } else {
+        // Resolve standard pending deficit
+        transactionToUpdate = await WalletTransaction.findById(deficitId).session(session);
+        if (!transactionToUpdate) throw new Error("Deficit transaction not found");
+        if (transactionToUpdate.status !== "pending") throw new Error("This transaction is not pending");
+
+        clientWallet = await Wallet.findOne({ userId: transactionToUpdate.userId }).session(session);
+        amount = Math.abs(transactionToUpdate.amount);
+        description = transactionToUpdate.description.replace("[BONUS DEFICIT]", "[DEFICIT RESOLVED]");
+      }
+
+      if (!clientWallet) throw new Error("Client wallet not found");
+
+      // Check balance
+      if (clientWallet.balance < amount) {
+        await session.abortTransaction();
+        return res.status(400).json({ 
+          message: `Client does not have enough balance. They need ₹${amount}, but only have ₹${clientWallet.balance}. Please ask them to deposit funds first.` 
+        });
+      }
+
+      // Deduct balance
+      clientWallet.balance -= amount;
+      await clientWallet.save({ session });
+
+      if (isLegacy) {
+        // Create new completed transaction for legacy
+        await WalletTransaction.create([{
+          walletId: clientWallet._id,
+          userId: clientWallet.userId,
+          type: "bonus_charge",
+          amount: -amount,
+          balanceAfter: clientWallet.balance,
+          escrowBalanceAfter: clientWallet.escrowBalance,
+          status: "completed",
+          referenceId: milestoneId,
+          referenceModel: "Milestone",
+          description: description,
+          performedBy: req.user.userId
+        }], { session });
+      } else {
+        // Update existing transaction to completed
+        transactionToUpdate.status = "completed";
+        transactionToUpdate.balanceAfter = clientWallet.balance;
+        transactionToUpdate.escrowBalanceAfter = clientWallet.escrowBalance;
+        transactionToUpdate.description = description;
+        transactionToUpdate.performedBy = req.user.userId;
+        await transactionToUpdate.save({ session });
+      }
+
+      await session.commitTransaction();
+      res.json({ message: "Deficit successfully resolved. Funds deducted from client's wallet." });
+
+    } catch (err) {
+      await session.abortTransaction();
+      console.error("Resolve Deficit Error:", err);
+      res.status(500).json({ message: err.message || "Error resolving deficit" });
+    } finally {
+      session.endSession();
+    }
+  }
+);
+
 module.exports = router;

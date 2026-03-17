@@ -19,6 +19,7 @@ const fs = require("fs");
 const path = require("path");
 const Ongoing = require("../models/OnGoingProject.Schema");
 const walletHelper = require("../utils/walletHelper");
+const WalletTransaction = require("../models/WalletTransaction");
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -286,6 +287,119 @@ router.post(
         message: "Error creating order",
         error: err.message,
       });
+    } finally {
+      session.endSession();
+    }
+  }
+);
+
+/**
+ * POST /add-funds/create-order
+ * Create a new Razorpay payment order for adding funds to the wallet
+ */
+router.post(
+  "/add-funds/create-order",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    try {
+      const { amount, currency } = req.body;
+
+      if (!amount || !Number.isInteger(amount) || amount < 100) {
+        return res.status(400).json({
+          message: "Amount must be a positive integer in paise (minimum 100 = ₹1)",
+        });
+      }
+
+      const options = {
+        amount,
+        currency: currency || "INR",
+        receipt: `rcpt_topup_${Math.random().toString(36).substring(7)}`,
+      };
+
+      const order = await razorpay.orders.create(options);
+      
+      res.status(200).json({
+        success: true,
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+      });
+    } catch (err) {
+      console.error("Top-up Order Creation Error:", err);
+      res.status(500).json({ message: "Failed to create order for wallet top-up" });
+    }
+  }
+);
+
+/**
+ * POST /add-funds/verify
+ * Verify Razorpay payment signature and add funds to wallet
+ */
+router.post(
+  "/add-funds/verify",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    const session = await mongoose.startSession();
+    try {
+      session.startTransaction();
+
+      const clientId = req.user.userId;
+      const {
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+        amountAdded // amount in rupees
+      } = req.body;
+
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !amountAdded) {
+        return res.status(400).json({ message: "Missing required parameters" });
+      }
+
+      // Verify signature
+      const body = razorpay_order_id + "|" + razorpay_payment_id;
+      const expectedSignature = crypto
+        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+        .update(body.toString())
+        .digest("hex");
+
+      if (expectedSignature !== razorpay_signature) {
+        return res.status(400).json({ message: "Invalid payment signature" });
+      }
+
+      // Verify transaction doesn't already exist to prevent double credit
+      const existingTx = await WalletTransaction.findOne({
+        referenceId: razorpay_payment_id,
+      }).session(session);
+
+      if (existingTx) {
+        await session.abortTransaction();
+        return res.status(400).json({ message: "Payment already processed" });
+      }
+
+      // Credit wallet using your wallet helper
+      const updatedWallet = await walletHelper.creditWallet(
+        clientId,
+        amountAdded,
+        "Wallet top-up via Razorpay", // description
+        razorpay_payment_id,          // referenceId
+        undefined,                    // referenceModel (not mapping to a local model)
+        session
+      );
+
+      await session.commitTransaction();
+
+      res.status(200).json({
+        success: true,
+        message: "Funds successfully added to wallet",
+        newBalance: updatedWallet.balance,
+      });
+
+    } catch (err) {
+      await session.abortTransaction();
+      console.error("Top-up Verification Error:", err);
+      res.status(500).json({ message: "Failed to verify top-up payment" });
     } finally {
       session.endSession();
     }
@@ -756,6 +870,14 @@ router.post(
         await session.abortTransaction();
         return res.status(400).json({
           message: "Agreement integrity check failed",
+        });
+      }
+
+      // Block lump-sum release for milestone-based agreements
+      if (agreement.paymentType === "milestone") {
+        await session.abortTransaction();
+        return res.status(400).json({
+          message: "This project uses milestone-based payments. Payment is released per milestone, not as a lump sum.",
         });
       }
 

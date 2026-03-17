@@ -79,8 +79,21 @@ router.get(
         .sort({ createdAt: -1 })
         .limit(100)
         .select("type amount balanceAfter escrowBalanceAfter description status createdAt referenceModel referenceId")
-        .populate({ path: "referenceId", model: "Project", select: "title status" })
         .lean();
+
+      // Manually populate Project titles to avoid CastError on string referenceIds
+      for (const t of transactions) {
+        if (t.referenceModel === "Project" && t.referenceId) {
+          try {
+            const project = await Project.findById(t.referenceId).select("title status").lean();
+            if (project) {
+              t.projectPopulated = project;
+            }
+          } catch (err) {
+            // Ignore cast errors for invalid project IDs
+          }
+        }
+      }
 
       // Fetch projects the freelancer is working on
       const projects = await Project.find({ freelancerId });

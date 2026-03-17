@@ -39,6 +39,8 @@ const WalletTransactionSchema = new mongoose.Schema(
         "withdrawal_reversal",
         "admin_adjustment",
         "admin_clawback",
+        "bonus_charge",
+        "penalty_refund",
       ],
       required: true,
     },
@@ -61,7 +63,7 @@ const WalletTransactionSchema = new mongoose.Schema(
 
     // Optional link to the business entity that triggered this transaction
     referenceId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String, // Changed from ObjectId to String to support Razorpay IDs like "pay_xxxxx"
     },
     referenceModel: {
       type: String,

@@ -195,6 +195,13 @@ By signing this agreement, both parties acknowledge they have read, understood, 
     },
 
 
+    // Payment Release Strategy
+    paymentType: {
+      type: String,
+      enum: ["project_completion", "milestone"],
+      default: "project_completion",
+    },
+
     // Metadata
     agreementNumber: {
       type: String,
@@ -341,7 +348,7 @@ AgreementSchema.methods.updateTerms = async function (updates) {
     throw new Error("Agreement can only be edited while in draft status");
   }
 
-  const allowedFields = ["deliverables", "deadline", "agreedAmount", "projectDescription"];
+  const allowedFields = ["deliverables", "deadline", "agreedAmount", "projectDescription", "paymentType"];
   
   for (const field of allowedFields) {
     if (updates[field] !== undefined) {
@@ -453,6 +460,7 @@ AgreementSchema.methods.createAmendment = async function (newAmount, reason, ame
     totalAmount: newAmount + this.platformFee,
     deadline: this.deadline,
     deliverables: this.deliverables,
+    paymentType: this.paymentType,
     status: "draft", // Both must re-sign
   });
 

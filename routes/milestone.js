@@ -9,6 +9,8 @@ const Transaction = require("../models/Transaction");
 const sendEmail = require("../utils/sendEmail");
 const Activity = require("../models/ActionSchema");
 const walletHelper = require("../utils/walletHelper");
+const Ongoing = require("../models/OnGoingProject.Schema");
+const Escrow = require("../models/Escrow");
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -376,16 +378,48 @@ router.post(
       await milestone.confirm();
       await milestone.release();
 
-      // ── GLOBAL WALLET: release milestone funds from client escrow → freelancer balance ──
+      // ── SPLIT PAYMENT: release base amount from escrow, handle bonus/penalty separately ──
+      const baseAmount = milestone.amount;       // Original milestone amount
+      const bonusAmt = milestone.bonusAmount || 0;
+      const penaltyAmt = milestone.penaltyAmount || 0;
+
+      // 1) Release BASE amount (minus penalty if any) from client escrow → freelancer
+      const escrowReleaseAmount = baseAmount - penaltyAmt;
       await walletHelper.releaseEscrow(
         clientId,
         milestone.freelancerId._id,
-        milestone.finalAmount,
-        null,   // no single Escrow doc id for milestones — project's escrow holds it
+        escrowReleaseAmount,
+        null,
         milestone.projectId,
-        `Milestone payment: ${milestone.title}`,
+        `Milestone payment: ${milestone.title} (base: ₹${baseAmount}${penaltyAmt > 0 ? `, penalty: -₹${penaltyAmt}` : ""})`,
         session
       );
+
+      // 2) If penalty: refund the penalty savings back to client's available balance
+      if (penaltyAmt > 0) {
+        await walletHelper.refundEscrow(
+          clientId,
+          penaltyAmt,
+          null,
+          milestone.projectId,
+          `Penalty savings refund: ${milestone.title} (${milestone.daysLate} days late, -₹${penaltyAmt})`,
+          session
+        );
+      }
+
+      // 3) If bonus: charge from client's WALLET BALANCE (not escrow) → freelancer
+      let bonusResult = null;
+      if (bonusAmt > 0) {
+        bonusResult = await walletHelper.chargeBonusFromWallet(
+          clientId,
+          milestone.freelancerId._id,
+          bonusAmt,
+          milestone.projectId,
+          milestone._id,
+          `Early delivery bonus: ${milestone.title} (${milestone.daysEarly} days early, +₹${bonusAmt})`,
+          session
+        );
+      }
 
       // Start next milestone if exists
       const nextMilestone = await Milestone.findOne({
@@ -398,6 +432,38 @@ router.post(
         nextMilestone.status = "in_progress";
         nextMilestone.startedAt = new Date();
         await nextMilestone.save({ session });
+      }
+
+      // ── AUTO-COMPLETE: Check if all milestones for this agreement are released ──
+      const allMilestones = await Milestone.find({ agreementId: milestone.agreementId }).session(session);
+      const allReleased = allMilestones.every(m => m.status === "released");
+
+      if (allReleased) {
+        // Mark project, agreement, and ongoing project as completed
+        await Project.findByIdAndUpdate(
+          milestone.projectId,
+          { status: "completed" },
+          { session }
+        );
+        await Agreement.findByIdAndUpdate(
+          milestone.agreementId,
+          { status: "completed" },
+          { session }
+        );
+        await Ongoing.findOneAndUpdate(
+          { projectId: milestone.projectId.toString() },
+          { status: "completed", progress: 100 },
+          { session }
+        );
+
+        // Mark escrow as fully released
+        await Escrow.findOneAndUpdate(
+          { projectId: milestone.projectId },
+          { status: "released", amount: 0 },
+          { session }
+        );
+
+        console.log(`[MILESTONE AUTO-COMPLETE] All milestones released for project ${milestone.projectId} — project completed`);
       }
 
       await session.commitTransaction();

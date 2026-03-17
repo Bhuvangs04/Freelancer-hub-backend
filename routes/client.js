@@ -482,8 +482,21 @@ router.get(
       const walletTxns = await WalletTransaction.find({ userId: req.user.userId })
         .sort({ createdAt: -1 })
         .limit(100)
-        .populate({ path: "referenceId", model: "Project", select: "title" })
         .lean();
+
+      // Manually populate Project titles to avoid CastError on string referenceIds (like Razorpay IDs)
+      for (const t of walletTxns) {
+        if (t.referenceModel === "Project" && t.referenceId) {
+          try {
+            const project = await Project.findById(t.referenceId).select("title").lean();
+            if (project) {
+              t.projectPopulated = project;
+            }
+          } catch (err) {
+            // Ignore cast errors for invalid project IDs
+          }
+        }
+      }
 
       // Summaries from the immutable ledger
       const total_deposited = walletTxns
@@ -499,8 +512,8 @@ router.get(
         .reduce((sum, t) => sum + t.amount, 0);
 
       const transaction_history = walletTxns.map((t) => ({
-        projectTitle: t.referenceId?.title || "N/A",
-        projectId: t.referenceId?._id || "N/A",
+        projectTitle: t.projectPopulated?.title || "N/A",
+        projectId: t.projectPopulated?._id || "N/A",
         type: t.type,
         status: t.status,
         amount: t.amount,
