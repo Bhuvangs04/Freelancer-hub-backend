@@ -168,7 +168,6 @@ router.put(
 router.put(
   "/settings/password",
   verifyToken,
-  authorize(["admin", "super_admin"]),
   async (req, res) => {
     try {
       const { currentPassword, newPassword } = req.body;
