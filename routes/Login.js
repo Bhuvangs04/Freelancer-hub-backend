@@ -158,7 +158,7 @@ router.post("/:userDetails/login", async (req, res) => {
         res.cookie("token", tempToken, {
           httpOnly: true,
           secure: process.env.NODE_ENV === "production",
-          sameSite: "strict",
+          sameSite: "None",
           maxAge: 10 * 60 * 1000, // 10 minutes
         });
         return res.status(200).json({
