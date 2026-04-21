@@ -20,6 +20,9 @@ const Action = require("../models/ActionSchema");
 const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
 const walletHelper = require("../utils/walletHelper");
+const AdminAlert = require("../models/AdminAlert");
+const PenaltyLog = require("../models/PenaltyLog");
+const Chat = require("../models/chat_sys");
 
 // Utils
 const { uploadFile } = require("../utils/S3");
@@ -1989,6 +1992,373 @@ router.delete(
     } catch (err) {
       console.error("Delete AI key error:", err);
       res.status(500).json({ message: "Error deleting API key" });
+    }
+  }
+);
+
+// ============================================================================
+// VIOLATION & MODERATION MANAGEMENT
+// ============================================================================
+
+/**
+ * GET /admin/violations
+ * List pending violation alerts (paginated)
+ */
+router.get(
+  "/violations",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { page = 1, limit = 20, status = "pending" } = req.query;
+      const filter = {};
+      if (status && status !== "all") filter.status = status;
+
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+      const [alerts, total] = await Promise.all([
+        AdminAlert.find(filter)
+          .populate("userId", "username email profilePictureUrl violationScore isBanned status")
+          .populate("projectId", "title status")
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit))
+          .lean(),
+        AdminAlert.countDocuments(filter),
+      ]);
+
+      res.json({
+        alerts,
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      });
+    } catch (err) {
+      console.error("Get violations error:", err);
+      res.status(500).json({ message: "Error fetching violations" });
+    }
+  }
+);
+
+/**
+ * GET /admin/violations/:alertId
+ * Get violation detail with evidence messages
+ */
+router.get(
+  "/violations/:alertId",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const alert = await AdminAlert.findById(req.params.alertId)
+        .populate("userId", "username email profilePictureUrl violationScore isBanned status Strikes")
+        .populate("projectId", "title status clientId freelancerId")
+        .populate({
+          path: "evidenceMessages",
+          select: "sender receiver message flagged flagReason timestamp",
+          populate: [
+            { path: "sender", select: "username" },
+            { path: "receiver", select: "username" },
+          ],
+        })
+        .populate("reviewedBy", "username");
+
+      if (!alert) {
+        return res.status(404).json({ message: "Alert not found" });
+      }
+
+      // Also fetch the user's wallet status
+      const wallet = await Wallet.findOne({ userId: alert.userId._id }).lean();
+
+      res.json({ alert, wallet });
+    } catch (err) {
+      console.error("Get violation detail error:", err);
+      res.status(500).json({ message: "Error fetching violation details" });
+    }
+  }
+);
+
+/**
+ * PUT /admin/violations/:alertId/revoke
+ * Revoke ban: reset user status, unfreeze wallet, reset violation score
+ */
+router.put(
+  "/violations/:alertId/revoke",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { notes } = req.body;
+      const alert = await AdminAlert.findById(req.params.alertId);
+      if (!alert) return res.status(404).json({ message: "Alert not found" });
+
+      // Reset user
+      await User.findByIdAndUpdate(alert.userId, {
+        isBanned: false,
+        status: "active",
+        violationScore: 0,
+        Strikes: 0,
+        banExpiresAt: null,
+        isbanDate: null,
+      });
+
+      // Unfreeze wallet
+      await Wallet.findOneAndUpdate(
+        { userId: alert.userId },
+        {
+          status: "ACTIVE",
+          freezeReason: null,
+          frozenAt: null,
+          frozenBy: null,
+          withdrawalsBlocked: false,
+          withdrawalBlockedReason: null,
+          withdrawalBlockedAt: null,
+        }
+      );
+
+      // Mark alert as reviewed
+      alert.status = "reviewed";
+      alert.reviewedBy = req.user.userId;
+      alert.reviewedAt = new Date();
+      alert.reviewNotes = notes || "Ban revoked by admin";
+      await alert.save();
+
+      // Create penalty log
+      await PenaltyLog.create({
+        userId: alert.userId,
+        adminId: req.user.userId,
+        alertId: alert._id,
+        action: "REVOKE",
+        penaltyReason: notes || "Ban revoked — no violation confirmed",
+      });
+
+      await logAdminActivity(req.user.userId, "VIOLATION_REVOKE", {
+        targetType: "user",
+        targetId: alert.userId,
+        reason: notes || "Ban revoked",
+        ipAddress: getClientIp(req),
+      });
+
+      res.json({ message: "Ban revoked. User status and wallet restored." });
+    } catch (err) {
+      console.error("Revoke ban error:", err);
+      res.status(500).json({ message: "Error revoking ban" });
+    }
+  }
+);
+
+/**
+ * PUT /admin/violations/:alertId/ban
+ * Permanent ban: lock wallet, ban user
+ */
+router.put(
+  "/violations/:alertId/ban",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { reason } = req.body;
+      const alert = await AdminAlert.findById(req.params.alertId);
+      if (!alert) return res.status(404).json({ message: "Alert not found" });
+
+      // Ban user
+      await User.findByIdAndUpdate(alert.userId, {
+        isBanned: true,
+        status: "BANNED",
+        isbanDate: new Date(),
+        banExpiresAt: null,
+      });
+
+      // Lock wallet
+      const wallet = await Wallet.findOneAndUpdate(
+        { userId: alert.userId },
+        {
+          status: "LOCKED",
+          freezeReason: reason || "Permanent ban — wallet locked",
+          frozenAt: new Date(),
+          frozenBy: req.user.userId,
+          withdrawalsBlocked: true,
+          withdrawalBlockedReason: "Account permanently banned",
+          withdrawalBlockedAt: new Date(),
+          withdrawalBlockedBy: req.user.userId,
+        },
+        { new: true }
+      );
+
+      // Mark alert as reviewed
+      alert.status = "reviewed";
+      alert.reviewedBy = req.user.userId;
+      alert.reviewedAt = new Date();
+      alert.reviewNotes = reason || "Permanent ban applied";
+      await alert.save();
+
+      // Create penalty log
+      await PenaltyLog.create({
+        userId: alert.userId,
+        adminId: req.user.userId,
+        alertId: alert._id,
+        action: "BAN",
+        walletBalanceBefore: wallet ? wallet.balance : 0,
+        walletBalanceAfter: wallet ? wallet.balance : 0,
+        penaltyReason: reason || "Permanent ban for policy violations",
+      });
+
+      await logAdminActivity(req.user.userId, "VIOLATION_BAN", {
+        targetType: "user",
+        targetId: alert.userId,
+        reason: reason || "Permanent ban",
+        ipAddress: getClientIp(req),
+      });
+
+      res.json({ message: "User permanently banned. Wallet locked." });
+    } catch (err) {
+      console.error("Permanent ban error:", err);
+      res.status(500).json({ message: "Error applying permanent ban" });
+    }
+  }
+);
+
+/**
+ * POST /admin/violations/:alertId/penalty
+ * Apply partial penalty: deduct from wallet, refund remainder
+ * Body: { deductionAmount, penaltyReason }
+ */
+router.post(
+  "/violations/:alertId/penalty",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { deductionAmount, penaltyReason } = req.body;
+
+      if (!deductionAmount || deductionAmount <= 0) {
+        return res.status(400).json({ message: "deductionAmount must be a positive number" });
+      }
+      if (!penaltyReason || penaltyReason.trim().length < 5) {
+        return res.status(400).json({ message: "penaltyReason is required (min 5 chars)" });
+      }
+
+      const alert = await AdminAlert.findById(req.params.alertId);
+      if (!alert) return res.status(404).json({ message: "Alert not found" });
+
+      const wallet = await Wallet.findOne({ userId: alert.userId });
+      if (!wallet) return res.status(404).json({ message: "Wallet not found" });
+
+      const walletBalanceBefore = wallet.balance;
+
+      if (deductionAmount > walletBalanceBefore) {
+        return res.status(400).json({
+          message: `Deduction amount (${deductionAmount}) exceeds wallet balance (${walletBalanceBefore})`,
+        });
+      }
+
+      const refundAmount = walletBalanceBefore - deductionAmount;
+
+      // Deduct from wallet
+      wallet.balance = refundAmount;
+      wallet.status = "ACTIVE"; // Unfreeze after penalty
+      wallet.freezeReason = null;
+      wallet.frozenAt = null;
+      wallet.frozenBy = null;
+      await wallet.save();
+
+      // Reset user status
+      await User.findByIdAndUpdate(alert.userId, {
+        status: "active",
+        isBanned: false,
+        violationScore: 0,
+        Strikes: 0,
+      });
+
+      // Mark alert reviewed
+      alert.status = "reviewed";
+      alert.reviewedBy = req.user.userId;
+      alert.reviewedAt = new Date();
+      alert.reviewNotes = `Penalty applied: deducted ${deductionAmount}, remaining ${refundAmount}`;
+      await alert.save();
+
+      // Create penalty log
+      await PenaltyLog.create({
+        userId: alert.userId,
+        adminId: req.user.userId,
+        alertId: alert._id,
+        action: "PENALTY",
+        penaltyAmount: deductionAmount,
+        refundAmount,
+        walletBalanceBefore,
+        walletBalanceAfter: refundAmount,
+        penaltyReason,
+      });
+
+      await logAdminActivity(req.user.userId, "VIOLATION_PENALTY", {
+        targetType: "user",
+        targetId: alert.userId,
+        reason: penaltyReason,
+        metadata: { deductionAmount, refundAmount, walletBalanceBefore },
+        ipAddress: getClientIp(req),
+      });
+
+      res.json({
+        message: "Penalty applied successfully",
+        deductionAmount,
+        refundAmount,
+        walletBalanceBefore,
+        walletBalanceAfter: refundAmount,
+      });
+    } catch (err) {
+      console.error("Apply penalty error:", err);
+      res.status(500).json({ message: "Error applying penalty" });
+    }
+  }
+);
+
+/**
+ * GET /admin/users/:userId/chat-history
+ * View all flagged messages for a user
+ */
+router.get(
+  "/users/:userId/chat-history",
+  verifyToken,
+  authorize(["admin", "super_admin"]),
+  async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const { flaggedOnly = "true", page = 1, limit = 50 } = req.query;
+
+      const filter = {
+        $or: [{ sender: userId }, { receiver: userId }],
+      };
+      if (flaggedOnly === "true") {
+        filter.flagged = true;
+      }
+
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+      const [messages, total] = await Promise.all([
+        Chat.find(filter)
+          .populate("sender", "username")
+          .populate("receiver", "username")
+          .populate("projectId", "title")
+          .sort({ timestamp: -1 })
+          .skip(skip)
+          .limit(parseInt(limit))
+          .lean(),
+        Chat.countDocuments(filter),
+      ]);
+
+      res.json({
+        messages,
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      });
+    } catch (err) {
+      console.error("Get chat history error:", err);
+      res.status(500).json({ message: "Error fetching chat history" });
     }
   }
 );

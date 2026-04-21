@@ -804,4 +804,51 @@ router.get(
 // );
 
 
+// ============================================================================
+// POST /bids/:bidId/request-resume — Client requests resume access
+// ============================================================================
+router.post(
+  "/bids/:bidId/request-resume",
+  verifyToken,
+  authorize(["client"]),
+  async (req, res) => {
+    try {
+      const { bidId } = req.params;
+
+      const bid = await BidSchema.findById(bidId).populate("projectId", "clientId");
+      if (!bid) {
+        return res.status(404).json({ message: "Bid not found" });
+      }
+
+      // Verify the client owns this project
+      if (bid.projectId.clientId.toString() !== req.user.userId) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      // Already has permission
+      if (bid.resume_permission) {
+        return res.status(200).json({ message: "Resume already accessible" });
+      }
+
+      // Already requested
+      if (bid.resume_request_status === "requested") {
+        return res.status(200).json({ message: "Resume request already sent" });
+      }
+
+      bid.resume_request_status = "requested";
+      await bid.save();
+
+      await logActivity(req.user.userId, "Requested resume access for a bid");
+
+      res.status(200).json({
+        message: "Resume request sent to freelancer",
+        resume_request_status: "requested",
+      });
+    } catch (error) {
+      console.error("Error requesting resume:", error);
+      res.status(500).json({ message: "Error sending resume request" });
+    }
+  }
+);
+
 module.exports = router;

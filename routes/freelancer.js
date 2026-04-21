@@ -892,5 +892,110 @@ router.post(
   }
 );
 
+// ============================================================================
+// GET /resume-requests — Freelancer views all pending resume requests
+// ============================================================================
+router.get(
+  "/resume-requests",
+  verifyToken,
+  authorize(["freelancer"]),
+  async (req, res) => {
+    try {
+      const bids = await BidSchema.find({
+        freelancerId: req.user.userId,
+        resume_request_status: "requested",
+      })
+        .populate({
+          path: "projectId",
+          select: "title description budget deadline clientId skillsRequired",
+          populate: {
+            path: "clientId",
+            select: "username profilePictureUrl",
+          },
+        })
+        .sort({ updatedAt: -1 })
+        .lean();
+
+      res.status(200).json({
+        success: true,
+        requests: bids.map((bid) => ({
+          bidId: bid._id,
+          projectId: bid.projectId?._id,
+          projectTitle: bid.projectId?.title,
+          projectBudget: bid.projectId?.budget,
+          projectDeadline: bid.projectId?.deadline,
+          projectSkills: bid.projectId?.skillsRequired,
+          clientUsername: bid.projectId?.clientId?.username,
+          clientProfilePicture: bid.projectId?.clientId?.profilePictureUrl,
+          bidAmount: bid.amount,
+          bidMessage: bid.message,
+          requestedAt: bid.updatedAt,
+        })),
+      });
+    } catch (error) {
+      console.error("Error fetching resume requests:", error);
+      res.status(500).json({ message: "Error fetching resume requests" });
+    }
+  }
+);
+
+// ============================================================================
+// POST /resume-requests/:bidId/respond — Freelancer approves or denies
+// Body: { action: "approve" | "deny" }
+// ============================================================================
+router.post(
+  "/resume-requests/:bidId/respond",
+  verifyToken,
+  authorize(["freelancer"]),
+  async (req, res) => {
+    try {
+      const { bidId } = req.params;
+      const { action } = req.body;
+
+      if (!["approve", "deny"].includes(action)) {
+        return res
+          .status(400)
+          .json({ message: "Action must be 'approve' or 'deny'" });
+      }
+
+      const bid = await BidSchema.findOne({
+        _id: bidId,
+        freelancerId: req.user.userId,
+      });
+
+      if (!bid) {
+        return res.status(404).json({ message: "Bid not found" });
+      }
+
+      if (bid.resume_request_status !== "requested") {
+        return res.status(400).json({
+          message: "No pending resume request for this bid",
+        });
+      }
+
+      if (action === "approve") {
+        bid.resume_request_status = "approved";
+        bid.resume_permission = true;
+      } else {
+        bid.resume_request_status = "denied";
+      }
+
+      await bid.save();
+      await logActivity(
+        req.user.userId,
+        `${action === "approve" ? "Approved" : "Denied"} resume request`
+      );
+
+      res.status(200).json({
+        message: `Resume request ${action === "approve" ? "approved" : "denied"}`,
+        resume_request_status: bid.resume_request_status,
+        resume_permission: bid.resume_permission,
+      });
+    } catch (error) {
+      console.error("Error responding to resume request:", error);
+      res.status(500).json({ message: "Error processing resume request" });
+    }
+  }
+);
 
 module.exports = router;

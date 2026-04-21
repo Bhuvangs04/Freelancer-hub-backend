@@ -43,6 +43,7 @@ const skills = require("./routes/skills");
 const finance = require("./routes/finance");
 const metrics = require("./routes/metrics");
 const aiGateway = require("./routes/aiGateway");
+const ml = require("./routes/ml");
 
 // ============================================================================
 // SECURITY MIDDLEWARE
@@ -166,6 +167,9 @@ app.use("/api/vi/finance", finance);
 // AI Gateway (server-to-server, API key auth)
 app.use("/api/vi/ai-gateway", aiGateway);
 
+// ML Models (JWT auth + demo endpoints)
+app.use("/api/vi/ml", ml);
+
 // Admin Panel
 app.use("/admin", admin);
 app.use("/admin", require("./routes/adminSettings"));
@@ -220,6 +224,7 @@ app.use(errorHandler);
 // ============================================================================
 
 const wsService = new WebSocketService(server);
+app.locals.wsService = wsService;
 
 // ============================================================================
 // SERVER START

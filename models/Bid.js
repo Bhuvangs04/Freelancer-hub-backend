@@ -13,6 +13,11 @@ const BidSchema = new mongoose.Schema(
       required: true,
     },
     resume_permission: { type: Boolean, required: true, default: false },
+    resume_request_status: {
+      type: String,
+      enum: ["none", "requested", "approved", "denied"],
+      default: "none",
+    },
     amount: { type: Number, required: true },
     message: { type: String },
     status: {

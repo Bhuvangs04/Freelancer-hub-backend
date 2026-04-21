@@ -45,6 +45,7 @@ const UserSchema = new mongoose.Schema(
     },
     banExpiresAt: { type: Date },
     Strikes: { type: Number, default: 0 },
+    violationScore: { type: Number, default: 0 },
     portflio: { type: String, default: "" },
     githubUsername: { type: String },
     githubData: {
@@ -105,7 +106,7 @@ const UserSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["Available", "active", "Busy", "Away"],
+      enum: ["Available", "active", "Busy", "Away", "UNDER_REVIEW", "BANNED"],
       default: "active",
     },
     companyName: { type: String },

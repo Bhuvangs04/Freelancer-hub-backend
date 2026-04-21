@@ -39,6 +39,26 @@ const WalletSchema = new mongoose.Schema(
       default: "INR",
     },
 
+    // ── Wallet Freeze Controls ──────────────────────────────────────────────
+    status: {
+      type: String,
+      enum: ["ACTIVE", "FROZEN", "LOCKED"],
+      default: "ACTIVE",
+    },
+    freezeReason: {
+      type: String,
+      default: null,
+    },
+    frozenAt: {
+      type: Date,
+      default: null,
+    },
+    frozenBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     // ── Admin withdrawal controls ──────────────────────────────────────────────
     /** When true, the user's balance cannot be debited for a withdrawal. */
     withdrawalsBlocked: {
